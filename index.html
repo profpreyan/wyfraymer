@@ -52,21 +52,21 @@
           <select id="screen-select"></select>
           <button id="add-screen" type="button">+ Screen</button>
         </div>
+        <div id="selection-bar" class="selection-bar inactive" aria-live="polite">
+          <div class="selection-summary">
+            <span id="selection-label">No element selected</span>
+          </div>
+          <div class="selection-controls">
+            <label for="link-select">On click go to:</label>
+            <select id="link-select">
+              <option value="">No link</option>
+            </select>
+            <button id="clear-link" type="button">Clear</button>
+          </div>
+        </div>
         <div class="screen-actions">
           <button id="duplicate-screen" type="button" title="Duplicate current screen">Duplicate</button>
           <button id="delete-screen" type="button" title="Delete current screen">Delete</button>
-        </div>
-      </div>
-      <div id="selection-bar" class="selection-bar hidden" aria-live="polite">
-        <div class="selection-summary">
-          <span id="selection-label">No element selected</span>
-        </div>
-        <div class="selection-controls">
-          <label for="link-select">On click go to:</label>
-          <select id="link-select">
-            <option value="">No link</option>
-          </select>
-          <button id="clear-link" type="button">Clear</button>
         </div>
       </div>
       <div id="canvas-container" class="canvas-container" aria-live="polite"></div>
@@ -97,13 +97,16 @@
     </div>
   </div>
   <div id="preview-backdrop" class="preview-backdrop hidden">
-    <div class="preview-modal" role="dialog" aria-modal="true" aria-labelledby="preview-title">
+    <div id="preview-modal" class="preview-modal" role="dialog" aria-modal="true" aria-labelledby="preview-title">
       <header class="preview-header">
         <h2 id="preview-title">Preview</h2>
         <div class="preview-tools">
           <label for="preview-screen-select">Screen:</label>
           <select id="preview-screen-select"></select>
         </div>
+        <button id="preview-fullscreen" class="preview-fullscreen" type="button" aria-pressed="false" title="Enter fullscreen preview">
+          Fullscreen
+        </button>
         <button id="close-preview" class="preview-close" type="button" aria-label="Close preview">×</button>
       </header>
       <div id="preview-canvas-container" class="preview-body"></div>

@@ -26,6 +26,8 @@ const previewBackdrop = document.getElementById('preview-backdrop');
 const previewScreenSelect = document.getElementById('preview-screen-select');
 const previewCanvasContainer = document.getElementById('preview-canvas-container');
 const closePreviewBtn = document.getElementById('close-preview');
+const previewModal = document.getElementById('preview-modal');
+const previewFullscreenBtn = document.getElementById('preview-fullscreen');
 
 let selectedElement = null;
 let dragState = null;
@@ -42,6 +44,7 @@ let pasteIteration = 0;
 let isUpdatingLinkSelect = false;
 let previewActiveScreenId = null;
 let previousBodyOverflow = '';
+let previewLayoutObserver = null;
 
 const screens = new Map();
 let screenCounter = 1;
@@ -167,9 +170,18 @@ function init() {
     });
     layoutObserver.observe(canvasContainer);
   }
+  if (typeof ResizeObserver !== 'undefined' && previewCanvasContainer) {
+    previewLayoutObserver = new ResizeObserver(() => {
+      scaleAllPreviewCanvases();
+    });
+    previewLayoutObserver.observe(previewCanvasContainer);
+  }
   window.addEventListener('resize', () => {
     if (activeScreenId && screens.has(activeScreenId)) {
       scheduleCanvasScale(screens.get(activeScreenId).canvas);
+    }
+    if (isPreviewOpen()) {
+      scaleAllPreviewCanvases();
     }
   });
 
@@ -398,6 +410,9 @@ function attachPreviewControls() {
     previewScreenSelect.addEventListener('change', (event) => {
       activatePreviewScreen(event.target.value);
     });
+  }
+  if (previewFullscreenBtn) {
+    previewFullscreenBtn.addEventListener('click', togglePreviewFullscreen);
   }
 }
 
@@ -924,7 +939,7 @@ function updateSizeControls(width, height, presetKey) {
   const keyToUse = matchedPreset && SIZE_PRESETS[matchedPreset] ? matchedPreset : 'custom';
 
   screenSizeSelect.value = keyToUse;
-  currentSizeLabel.textContent = `${width} × ${height}`;
+  currentSizeLabel.textContent = `${width} \u00D7 ${height}`;
   customWidthInput.value = width;
   customHeightInput.value = height;
 
@@ -1009,9 +1024,12 @@ function clearLinksToScreen(screenId) {
 }
 
 function refreshSelectionBar() {
-  if (!selectionBar || !linkSelect || !selectionLabel) return;
-  if (!selectedElement) {
-    selectionBar.classList.add('hidden');
+  if (!selectionBar || !linkSelect || !selectionLabel || !clearLinkBtn) return;
+  const hasSelection = Boolean(selectedElement);
+  selectionBar.classList.toggle('inactive', !hasSelection);
+  linkSelect.disabled = !hasSelection;
+  clearLinkBtn.disabled = !hasSelection;
+  if (!hasSelection) {
     selectionLabel.textContent = 'No element selected';
     if (!isUpdatingLinkSelect) {
       isUpdatingLinkSelect = true;
@@ -1020,10 +1038,9 @@ function refreshSelectionBar() {
     }
     return;
   }
-  selectionBar.classList.remove('hidden');
   const targetId = selectedElement.dataset.targetScreen;
   if (targetId && screens.has(targetId)) {
-    selectionLabel.textContent = `${formatElementLabel(selectedElement)} → ${screens.get(targetId).name}`;
+    selectionLabel.textContent = `${formatElementLabel(selectedElement)} -> ${screens.get(targetId).name}`;
   } else {
     selectionLabel.textContent = `${formatElementLabel(selectedElement)} selected`;
   }
@@ -1077,6 +1094,7 @@ function openPreview() {
   if (isHelpOpen()) {
     closeHelpModal();
   }
+  updatePreviewFullscreenUi(false);
   if (!previewActiveScreenId || !screens.has(previewActiveScreenId)) {
     previewActiveScreenId = activeScreenId || screens.keys().next().value;
   }
@@ -1088,10 +1106,14 @@ function openPreview() {
     previewButton.setAttribute('aria-pressed', 'true');
   }
   previewScreenSelect.focus();
+  window.requestAnimationFrame(() => {
+    scaleAllPreviewCanvases();
+  });
 }
 
 function closePreview() {
   if (!isPreviewOpen()) return;
+  updatePreviewFullscreenUi(false);
   previewBackdrop.classList.add('hidden');
   if (previewCanvasContainer) {
     previewCanvasContainer.innerHTML = '';
@@ -1145,6 +1167,7 @@ function activatePreviewScreen(screenId) {
       wrapper.style.display = 'none';
     }
   });
+  scaleAllPreviewCanvases();
 }
 
 function createPreviewCanvas(screenData) {
@@ -1353,6 +1376,95 @@ function parsePx(value, fallback = 0) {
   }
   const parsed = parseFloat(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function updatePreviewFullscreenUi(isFullscreen) {
+  if (previewModal) {
+    previewModal.classList.toggle('fullscreen', Boolean(isFullscreen));
+  }
+  if (previewFullscreenBtn) {
+    previewFullscreenBtn.setAttribute('aria-pressed', isFullscreen ? 'true' : 'false');
+    previewFullscreenBtn.textContent = isFullscreen ? 'Exit fullscreen' : 'Fullscreen';
+    previewFullscreenBtn.title = isFullscreen ? 'Exit fullscreen preview' : 'Enter fullscreen preview';
+  }
+}
+
+function togglePreviewFullscreen() {
+  if (!previewModal) return;
+  const nextState = !previewModal.classList.contains('fullscreen');
+  updatePreviewFullscreenUi(nextState);
+  scaleAllPreviewCanvases();
+}
+
+function scaleAllPreviewCanvases() {
+  if (!previewCanvasContainer || !isPreviewOpen()) return;
+  const canvases = Array.from(previewCanvasContainer.querySelectorAll('.preview-canvas'));
+  if (!canvases.length) return;
+  window.requestAnimationFrame(() => {
+    canvases.forEach((canvas) => applyPreviewCanvasScale(canvas));
+  });
+}
+
+function applyPreviewCanvasScale(canvasEl) {
+  if (!canvasEl || !previewCanvasContainer) return;
+  const wrapper = canvasEl.closest('.preview-canvas-wrapper');
+  if (!wrapper) return;
+  const wrapperStyles = window.getComputedStyle(wrapper);
+  if (wrapperStyles.display === 'none') return;
+
+  const canvasWidth = parsePx(canvasEl.style.width, canvasEl.offsetWidth || 0);
+  const canvasHeight = parsePx(canvasEl.style.height, canvasEl.offsetHeight || 0);
+  if (!canvasWidth || !canvasHeight) {
+    canvasEl.style.transform = 'scale(1)';
+    canvasEl.style.top = '';
+    canvasEl.style.left = '';
+    canvasEl.style.margin = '';
+    wrapper.style.width = '';
+    wrapper.style.height = '';
+    return;
+  }
+
+  const containerStyles = window.getComputedStyle(previewCanvasContainer);
+  const containerWidth = Math.max(
+    previewCanvasContainer.clientWidth
+      - parseFloat(containerStyles.paddingLeft || '0')
+      - parseFloat(containerStyles.paddingRight || '0'),
+    0
+  );
+  const containerHeight = Math.max(
+    previewCanvasContainer.clientHeight
+      - parseFloat(containerStyles.paddingTop || '0')
+      - parseFloat(containerStyles.paddingBottom || '0'),
+    0
+  );
+
+  const paddingLeft = parseFloat(wrapperStyles.paddingLeft || '0');
+  const paddingRight = parseFloat(wrapperStyles.paddingRight || '0');
+  const paddingTop = parseFloat(wrapperStyles.paddingTop || '0');
+  const paddingBottom = parseFloat(wrapperStyles.paddingBottom || '0');
+
+  const availableWidth = Math.max(containerWidth - (paddingLeft + paddingRight), 0);
+  const availableHeight = Math.max(containerHeight - (paddingTop + paddingBottom), 0);
+
+  let rawScale = Math.min(1, availableWidth / canvasWidth, availableHeight / canvasHeight);
+  if (!Number.isFinite(rawScale) || rawScale <= 0) {
+    rawScale = Math.min(1, containerWidth / canvasWidth, containerHeight / canvasHeight);
+  }
+  const scale = Number.isFinite(rawScale) && rawScale > 0 ? rawScale : 1;
+
+  const scaledWidth = canvasWidth * scale;
+  const scaledHeight = canvasHeight * scale;
+
+  wrapper.style.width = `${scaledWidth + paddingLeft + paddingRight}px`;
+  wrapper.style.height = `${scaledHeight + paddingTop + paddingBottom}px`;
+
+  canvasEl.dataset.scale = String(scale);
+  canvasEl.style.transformOrigin = 'top left';
+  canvasEl.style.transform = `scale(${scale})`;
+  canvasEl.style.position = 'absolute';
+  canvasEl.style.top = `${paddingTop}px`;
+  canvasEl.style.left = `${paddingLeft}px`;
+  canvasEl.style.margin = '0';
 }
 
 window.addEventListener('load', init);
