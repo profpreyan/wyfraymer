@@ -10,6 +10,7 @@ const screenDropdown = document.getElementById('screen-select');
 const addScreenBtn = document.getElementById('add-screen');
 const duplicateScreenBtn = document.getElementById('duplicate-screen');
 const deleteScreenBtn = document.getElementById('delete-screen');
+const renameScreenBtn = document.getElementById('rename-screen');
 
 const helpButton = document.getElementById('help-button');
 const previewButton = document.getElementById('preview-button');
@@ -19,6 +20,7 @@ const modalBackdrop = document.getElementById('modal-backdrop');
 
 const selectionBar = document.getElementById('selection-bar');
 const selectionLabel = document.getElementById('selection-label');
+const linkControls = document.getElementById('link-controls');
 const linkSelect = document.getElementById('link-select');
 const clearLinkBtn = document.getElementById('clear-link');
 
@@ -839,6 +841,12 @@ function attachScreenManager() {
     setActiveScreen(screenId);
   });
 
+  if (renameScreenBtn) {
+    renameScreenBtn.addEventListener('click', () => {
+      renameActiveScreen();
+    });
+  }
+
   duplicateScreenBtn.addEventListener('click', () => {
     duplicateActiveScreen();
   });
@@ -972,6 +980,24 @@ function setActiveScreen(id) {
   screenDropdown.value = id;
   updateSizeControls(active.width, active.height, active.presetKey);
   refreshSelectionBar();
+}
+
+function renameActiveScreen() {
+  if (!activeScreenId || !screens.has(activeScreenId)) return;
+  const screenData = screens.get(activeScreenId);
+  const nameInput = prompt('Rename screen:', screenData.name);
+  if (nameInput === null) return;
+  const trimmed = nameInput.trim();
+  if (!trimmed || trimmed === screenData.name) return;
+
+  screenData.name = trimmed;
+  if (screenData.option) {
+    screenData.option.textContent = trimmed;
+  }
+  refreshSelectionBar();
+  if (isPreviewOpen()) {
+    buildPreviewScreens();
+  }
 }
 
 function duplicateActiveScreen() {
@@ -1589,6 +1615,9 @@ function refreshSelectionBar() {
   if (!selectionBar || !linkSelect || !selectionLabel || !clearLinkBtn) return;
   const hasSelection = Boolean(selectedElement);
   selectionBar.classList.toggle('inactive', !hasSelection);
+  if (linkControls) {
+    linkControls.hidden = !hasSelection;
+  }
   linkSelect.disabled = !hasSelection;
   clearLinkBtn.disabled = !hasSelection;
   if (!hasSelection) {

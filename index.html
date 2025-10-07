@@ -1,93 +1,96 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Wyframer</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="top-bar">
     <div class="brand">Wyframer</div>
-    <div class="screen-controls">
-      <label for="screen-size">Screen size:</label>
-      <select id="screen-size">
-        <option value="375x667">Mobile (375 × 667)</option>
-        <option value="768x1024">Tablet (768 × 1024)</option>
-        <option value="1280x720" selected>Desktop (1280 × 720)</option>
-        <option value="1440x900">Large Desktop (1440 × 900)</option>
-        <option value="1920x1080">Full HD (1920 × 1080)</option>
-        <option value="custom">Custom…</option>
-      </select>
-      <div class="custom-size" id="custom-size">
-        <input type="number" id="custom-width" placeholder="Width" min="200">
-        <span>×</span>
-        <input type="number" id="custom-height" placeholder="Height" min="200">
-        <button id="apply-custom">Apply</button>
+    <div class="top-bar-controls">
+      <div class="screen-controls">
+        <label for="screen-size">Screen size:</label>
+        <select id="screen-size">
+          <option value="375x667">Mobile (375 × 667)</option>
+          <option value="768x1024">Tablet (768 × 1024)</option>
+          <option value="1280x720" selected>Desktop (1280 × 720)</option>
+          <option value="1440x900">Large Desktop (1440 × 900)</option>
+          <option value="1920x1080">Full HD (1920 × 1080)</option>
+          <option value="custom">Custom...</option>
+        </select>
+        <div class="custom-size" id="custom-size" hidden>
+          <input type="number" id="custom-width" placeholder="Width" min="200" />
+          <span>×</span>
+          <input type="number" id="custom-height" placeholder="Height" min="200" />
+          <button id="apply-custom" type="button">Apply</button>
+        </div>
+        <div class="current-size" id="current-size">1280 × 720</div>
       </div>
-      <div class="current-size" id="current-size">1280 × 720</div>
+      <div class="screen-management">
+        <label for="screen-select">Screen:</label>
+        <select id="screen-select"></select>
+        <button id="rename-screen" type="button" title="Rename current screen">Rename</button>
+        <button id="add-screen" type="button" title="Add screen">+ Screen</button>
+        <button id="duplicate-screen" type="button" title="Duplicate current screen">Duplicate</button>
+        <button id="delete-screen" type="button" title="Delete current screen">Delete</button>
+      </div>
     </div>
     <div class="header-actions">
       <button id="preview-button" class="preview-button" type="button">Preview</button>
-      <button id="help-button" class="help-button" type="button">Help & Tips</button>
+      <button id="help-button" class="help-button" type="button">Help &amp; Tips</button>
     </div>
   </header>
+
   <main class="workspace">
     <aside class="palette">
       <h2>Components</h2>
       <div class="palette-items">
-        <button class="palette-item" draggable="true" data-type="button">Button</button>
-        <button class="palette-item" draggable="true" data-type="input">Input</button>
-        <button class="palette-item" draggable="true" data-type="dropdown">Dropdown</button>
-        <button class="palette-item" draggable="true" data-type="card">Card</button>
-        <button class="palette-item" draggable="true" data-type="heading">Heading</button>
-        <button class="palette-item" draggable="true" data-type="paragraph">Paragraph</button>
-        <button class="palette-item" draggable="true" data-type="image">Image Placeholder</button>
-        <button class="palette-item" draggable="true" data-type="text">Text</button>
-        <button class="palette-item" draggable="true" data-type="radio-group">Radio Group</button>
-        <button class="palette-item" draggable="true" data-type="slider">Slider</button>
+        <button class="palette-item" draggable="true" data-type="button" type="button">Button</button>
+        <button class="palette-item" draggable="true" data-type="input" type="button">Input</button>
+        <button class="palette-item" draggable="true" data-type="dropdown" type="button">Dropdown</button>
+        <button class="palette-item" draggable="true" data-type="card" type="button">Card</button>
+        <button class="palette-item" draggable="true" data-type="heading" type="button">Heading</button>
+        <button class="palette-item" draggable="true" data-type="paragraph" type="button">Paragraph</button>
+        <button class="palette-item" draggable="true" data-type="image" type="button">Image Placeholder</button>
+        <button class="palette-item" draggable="true" data-type="text" type="button">Text</button>
+        <button class="palette-item" draggable="true" data-type="radio-group" type="button">Radio Group</button>
+        <button class="palette-item" draggable="true" data-type="slider" type="button">Slider</button>
       </div>
+
       <section class="properties-panel" aria-labelledby="properties-title">
         <h3 id="properties-title">Properties</h3>
         <p id="properties-empty" class="properties-empty">Select an element to edit its basics.</p>
         <form id="properties-form" class="properties-form" autocomplete="off"></form>
-      </section>
-    </aside>
-    <section class="canvas-wrapper">
-      <div class="screen-toolbar">
-        <div class="screen-selector">
-          <label for="screen-select">Screen:</label>
-          <select id="screen-select"></select>
-          <button id="add-screen" type="button">+ Screen</button>
-        </div>
-        <div id="selection-bar" class="selection-bar inactive" aria-live="polite">
-          <div class="selection-summary">
-            <span id="selection-label">No element selected</span>
-          </div>
-          <div class="selection-controls">
-            <label for="link-select">On click go to:</label>
+        <div id="link-controls" class="link-controls" hidden>
+          <h4>Interactions</h4>
+          <label for="link-select">On click go to:</label>
+          <div class="link-control-row">
             <select id="link-select">
               <option value="">No link</option>
             </select>
             <button id="clear-link" type="button">Clear</button>
           </div>
         </div>
-        <div class="screen-actions">
-          <button id="duplicate-screen" type="button" title="Duplicate current screen">Duplicate</button>
-          <button id="delete-screen" type="button" title="Delete current screen">Delete</button>
-        </div>
-      </div>
+      </section>
+    </aside>
+
+    <section class="canvas-wrapper">
       <div id="canvas-container" class="canvas-container" aria-live="polite"></div>
     </section>
   </main>
+
   <footer class="status-bar">
     <span>Basic wireframing canvas for early UX ideas.</span>
   </footer>
-  <div id="modal-backdrop" class="modal-backdrop hidden"></div>
+
+  <div id="modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
+
   <div id="help-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
     <div class="modal-header">
       <h2 id="help-title">Wyframer guide</h2>
-      <button id="close-help" class="modal-close" type="button" aria-label="Close help">×</button>
+      <button id="close-help" class="modal-close" type="button" aria-label="Close help">&times;</button>
     </div>
     <div class="modal-content">
       <p>Sketch user flows quickly:</p>
@@ -104,7 +107,8 @@
       </ul>
     </div>
   </div>
-  <div id="preview-backdrop" class="preview-backdrop hidden">
+
+  <div id="preview-backdrop" class="preview-backdrop hidden" aria-hidden="true">
     <div id="preview-modal" class="preview-modal" role="dialog" aria-modal="true" aria-labelledby="preview-title">
       <header class="preview-header">
         <h2 id="preview-title">Preview</h2>
@@ -115,11 +119,12 @@
         <button id="preview-fullscreen" class="preview-fullscreen" type="button" aria-pressed="false" title="Enter fullscreen preview">
           Fullscreen
         </button>
-        <button id="close-preview" class="preview-close" type="button" aria-label="Close preview">×</button>
+        <button id="close-preview" class="preview-close" type="button" aria-label="Close preview">&times;</button>
       </header>
       <div id="preview-canvas-container" class="preview-body"></div>
     </div>
   </div>
+
   <script src="app.js"></script>
 </body>
 </html>

@@ -31,6 +31,15 @@ body {
   letter-spacing: 0.04em;
 }
 
+.top-bar-controls {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex: 1 1 auto;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
 .screen-controls {
   display: flex;
   align-items: center;
@@ -61,6 +70,63 @@ body {
 
 .screen-controls button:hover {
   background: #1d4ed8;
+}
+
+.screen-management {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.screen-management label {
+  font-size: 0.95rem;
+}
+
+.screen-management select {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #fff;
+  color: #111827;
+  min-width: 150px;
+}
+
+.screen-management button {
+  padding: 0.4rem 0.75rem;
+  border-radius: 4px;
+  border: 1px solid rgba(248, 250, 252, 0.35);
+  background: rgba(248, 250, 252, 0.12);
+  color: #f9fafb;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.screen-management button:hover {
+  background: rgba(248, 250, 252, 0.25);
+}
+
+.screen-management #add-screen {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.screen-management #add-screen:hover {
+  background: #1d4ed8;
+}
+
+.screen-management #delete-screen {
+  border-color: rgba(248, 113, 113, 0.6);
+}
+
+.screen-management #delete-screen:hover {
+  background: rgba(248, 113, 113, 0.25);
+}
+
+.screen-management button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .header-actions {
@@ -253,7 +319,7 @@ body {
   display: flex;
   align-items: center;
   gap: 1rem;
-  flex: 1 1 320px;
+  flex: 0 0 auto;
   padding: 0.65rem 1rem;
   border: none;
   border-radius: 6px;
@@ -271,102 +337,67 @@ body {
   font-size: 0.95rem;
 }
 
-.selection-controls {
+.link-controls {
   display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  margin-left: auto;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
 }
 
-.selection-controls label {
-  font-size: 0.9rem;
+.link-controls h4 {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.link-controls label {
+  font-size: 0.8rem;
+  font-weight: 600;
   color: #475569;
 }
 
-.selection-controls select {
-  padding: 0.35rem 0.5rem;
-  border: 1px solid #cbd5f5;
-  border-radius: 4px;
-  background: #fff;
-}
-
-.selection-controls button {
-  padding: 0.35rem 0.7rem;
-  border: none;
-  border-radius: 4px;
-  background: #e2e8f0;
-  color: #1f2937;
-  cursor: pointer;
-}
-
-.selection-controls button:hover {
-  background: #cbd5f5;
-}
-
-.selection-controls select:disabled,
-.selection-controls button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.screen-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.screen-selector,
-.screen-actions {
+.link-control-row {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.screen-selector {
-  flex: 0 0 auto;
-}
-
-.screen-actions {
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
-.screen-selector label {
-  font-size: 0.95rem;
-}
-
-.screen-selector select {
-  padding: 0.4rem 0.5rem;
-  border: 1px solid #d1d5db;
-  border-radius: 4px;
-  background: #fff;
-}
-
-.screen-selector button,
-.screen-actions button {
-  padding: 0.4rem 0.65rem;
+.link-control-row select {
+  flex: 1 1 auto;
+  padding: 0.35rem 0.5rem;
   border: 1px solid #cbd5f5;
   border-radius: 4px;
-  background: #eef2ff;
-  color: #1d4ed8;
+  font-size: 0.8rem;
+  background: #fff;
+  color: #1f2937;
+}
+
+.link-control-row select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.link-control-row button {
+  padding: 0.35rem 0.75rem;
+  border-radius: 4px;
+  border: 1px solid #d1d5db;
+  background: #e2e8f0;
+  color: #1f2937;
   cursor: pointer;
+  font-size: 0.8rem;
 }
 
-.screen-actions button {
-  background: #f3f4f6;
-  color: #374151;
+.link-control-row button:hover {
+  background: #cbd5f5;
 }
 
-.screen-selector button:hover,
-.screen-actions button:hover {
-  background: #e0e7ff;
-}
-
-.screen-actions button:hover {
-  background: #e5e7eb;
+.link-control-row button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .canvas-container {
@@ -1063,17 +1094,32 @@ body {
     order: -1;
   }
 
-  .screen-toolbar {
-    align-items: flex-start;
-  }
-
   .selection-bar {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .selection-controls {
-    margin-left: 0;
+  .top-bar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .top-bar-controls {
     justify-content: flex-start;
+  }
+
+  .header-actions {
+    align-self: stretch;
+    justify-content: flex-start;
+  }
+
+  .link-control-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .link-control-row button {
+    width: 100%;
   }
 }
