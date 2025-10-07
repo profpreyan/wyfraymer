@@ -22,6 +22,9 @@ const selectionLabel = document.getElementById('selection-label');
 const linkSelect = document.getElementById('link-select');
 const clearLinkBtn = document.getElementById('clear-link');
 
+const propertiesForm = document.getElementById('properties-form');
+const propertiesEmptyState = document.getElementById('properties-empty');
+
 const previewBackdrop = document.getElementById('preview-backdrop');
 const previewScreenSelect = document.getElementById('preview-screen-select');
 const previewCanvasContainer = document.getElementById('preview-canvas-container');
@@ -65,11 +68,512 @@ const COMPONENT_DEFAULTS = {
   card: { width: 280, height: 200 },
   heading: { width: 280, height: 60 },
   paragraph: { width: 320, height: 120 },
-  image: { width: 200, height: 160 }
+  image: { width: 200, height: 160 },
+  text: { width: 260, height: 100 },
+  'radio-group': { width: 240, height: 140 },
+  slider: { width: 260, height: 70 }
 };
+
+const PROPERTY_SCHEMAS = {
+  common: [
+    {
+      id: 'width',
+      label: 'Width (px)',
+      type: 'number',
+      min: MIN_WIDTH,
+      get: (element) => Math.round(parsePx(element.style.width, element.offsetWidth || MIN_WIDTH)),
+      set: (element, value) => applyElementSizeChange(element, { width: parseFloat(value) })
+    },
+    {
+      id: 'height',
+      label: 'Height (px)',
+      type: 'number',
+      min: MIN_HEIGHT,
+      get: (element) => Math.round(parsePx(element.style.height, element.offsetHeight || MIN_HEIGHT)),
+      set: (element, value) => applyElementSizeChange(element, { height: parseFloat(value) })
+    }
+  ],
+  button: [
+    {
+      id: 'button-label',
+      label: 'Label',
+      type: 'text',
+      get: (element) => getElementText(element, '.wire-button', element.dataset.label || 'Button'),
+      set: (element, value) => setElementText(element, '.wire-button', value, 'Button', 'label')
+    }
+  ],
+  input: [
+    {
+      id: 'input-placeholder',
+      label: 'Placeholder',
+      type: 'text',
+      get: (element) => element.dataset.placeholder || getElementText(element, '.wire-input', 'Input field'),
+      set: (element, value) => {
+        element.dataset.placeholder = value.trim() || 'Input field';
+        const target = element.querySelector('.wire-input');
+        if (target) {
+          target.textContent = element.dataset.placeholder;
+        }
+      }
+    }
+  ],
+  dropdown: [
+    {
+      id: 'dropdown-label',
+      label: 'Label',
+      type: 'text',
+      get: (element) => element.dataset.label || getElementText(element, '.wire-dropdown-label', 'Dropdown'),
+      set: (element, value) => {
+        element.dataset.label = value.trim() || 'Dropdown';
+        updateDropdownVisual(element);
+      }
+    },
+    {
+      id: 'dropdown-options',
+      label: 'Options (one per line)',
+      type: 'textarea',
+      rows: 3,
+      get: (element) => (element.dataset.options || 'Option 1\nOption 2\nOption 3'),
+      set: (element, value) => {
+        element.dataset.options = normaliseOptions(value, ['Option 1', 'Option 2', 'Option 3']).join('\n');
+        updateDropdownVisual(element);
+      }
+    }
+  ],
+  card: [
+    {
+      id: 'card-title',
+      label: 'Title',
+      type: 'text',
+      get: (element) => element.dataset.title || getElementText(element, '.wire-card h3', 'Card title'),
+      set: (element, value) => {
+        element.dataset.title = value.trim() || 'Card title';
+        updateCardVisual(element);
+      }
+    },
+    {
+      id: 'card-body',
+      label: 'Description',
+      type: 'textarea',
+      rows: 3,
+      get: (element) =>
+        element.dataset.body || getElementText(element, '.wire-card p', 'Supporting description text goes here.'),
+      set: (element, value) => {
+        element.dataset.body = value.trim() || 'Supporting description text goes here.';
+        updateCardVisual(element);
+      }
+    },
+    {
+      id: 'card-cta',
+      label: 'Button label',
+      type: 'text',
+      get: (element) => element.dataset.cta || getElementText(element, '.wire-card .wire-button', 'Action'),
+      set: (element, value) => {
+        element.dataset.cta = value.trim() || 'Action';
+        updateCardVisual(element);
+      }
+    }
+  ],
+  heading: [
+    {
+      id: 'heading-text',
+      label: 'Text',
+      type: 'text',
+      get: (element) => element.dataset.text || getElementText(element, '.wire-heading', 'Heading'),
+      set: (element, value) => setElementText(element, '.wire-heading', value, 'Heading', 'text')
+    }
+  ],
+  paragraph: [
+    {
+      id: 'paragraph-text',
+      label: 'Paragraph',
+      type: 'textarea',
+      rows: 4,
+      get: (element) =>
+        element.dataset.text ||
+        getElementText(element, '.wire-paragraph', 'Lorem ipsum placeholder copy for quick wireframes.'),
+      set: (element, value) =>
+        setElementText(
+          element,
+          '.wire-paragraph',
+          value,
+          'Lorem ipsum placeholder copy for quick wireframes.',
+          'text'
+        )
+    }
+  ],
+  text: [
+    {
+      id: 'text-content',
+      label: 'Text',
+      type: 'textarea',
+      rows: 4,
+      get: (element) => element.dataset.text || getElementText(element, '.wire-text', 'Sample text'),
+      set: (element, value) => setElementText(element, '.wire-text', value, 'Sample text', 'text')
+    }
+  ],
+  image: [
+    {
+      id: 'image-label',
+      label: 'Label',
+      type: 'text',
+      get: (element) => element.dataset.label || getElementText(element, '.wire-image', 'Image'),
+      set: (element, value) => setElementText(element, '.wire-image', value, 'Image', 'label')
+    }
+  ],
+  'radio-group': [
+    {
+      id: 'radio-label',
+      label: 'Group label',
+      type: 'text',
+      get: (element) => element.dataset.label || getElementText(element, '.wire-radio-label', 'Radio group'),
+      set: (element, value) => {
+        element.dataset.label = value.trim() || 'Radio group';
+        updateRadioGroupVisual(element);
+      }
+    },
+    {
+      id: 'radio-options',
+      label: 'Options (one per line)',
+      type: 'textarea',
+      rows: 3,
+      get: (element) => element.dataset.options || 'Option A\nOption B',
+      set: (element, value) => {
+        element.dataset.options = normaliseOptions(value, ['Option A', 'Option B']).join('\n');
+        updateRadioGroupVisual(element);
+      }
+    }
+  ],
+  slider: [
+    {
+      id: 'slider-label',
+      label: 'Label',
+      type: 'text',
+      get: (element) => element.dataset.label || getElementText(element, '.wire-slider-label', 'Slider'),
+      set: (element, value) => {
+        element.dataset.label = value.trim() || 'Slider';
+        updateSliderVisual(element);
+      }
+    },
+    {
+      id: 'slider-min',
+      label: 'Min',
+      type: 'number',
+      get: (element) => parseFloat(element.dataset.min ?? '0'),
+      set: (element, value) => {
+        element.dataset.min = String(value);
+        updateSliderVisual(element);
+      }
+    },
+    {
+      id: 'slider-max',
+      label: 'Max',
+      type: 'number',
+      get: (element) => parseFloat(element.dataset.max ?? '100'),
+      set: (element, value) => {
+        element.dataset.max = String(value);
+        updateSliderVisual(element);
+      }
+    },
+    {
+      id: 'slider-value',
+      label: 'Value',
+      type: 'number',
+      get: (element) => parseFloat(element.dataset.value ?? '50'),
+      set: (element, value) => {
+        element.dataset.value = String(value);
+        updateSliderVisual(element);
+      }
+    }
+  ]
+};
+
+const propertyFieldRefs = new Map();
+let activePropertySchema = [];
 
 let scaleFrameId = null;
 let layoutObserver = null;
+
+function getElementText(element, selector, fallback = '') {
+  if (!element) return fallback;
+  if (selector) {
+    const target = element.querySelector(selector);
+    if (target) {
+      const text = target.textContent || '';
+      return text.trim() || fallback;
+    }
+  } else {
+    const text = element.textContent || '';
+    return text.trim() || fallback;
+  }
+  return fallback;
+}
+
+function setElementText(element, selector, value, fallback, datasetKey) {
+  if (!element) return;
+  const resolved = value && value.trim() ? value.trim() : fallback;
+  if (datasetKey) {
+    element.dataset[datasetKey] = resolved;
+  }
+  const target = selector ? element.querySelector(selector) : element;
+  if (target) {
+    target.textContent = resolved;
+  }
+}
+
+function normaliseOptions(rawValue, fallbackOptions) {
+  const options = (rawValue || '')
+    .split(/\r?\n/)
+    .map((option) => option.trim())
+    .filter(Boolean);
+  if (!options.length) {
+    return [...fallbackOptions];
+  }
+  return options;
+}
+
+function applyElementSizeChange(element, { width, height }) {
+  if (!element) return;
+  const canvas = element.parentElement;
+  if (!canvas) return;
+  const currentWidth = parsePx(element.style.width, element.offsetWidth || MIN_WIDTH);
+  const currentHeight = parsePx(element.style.height, element.offsetHeight || MIN_HEIGHT);
+  let nextWidth = Number.isFinite(width) ? width : currentWidth;
+  let nextHeight = Number.isFinite(height) ? height : currentHeight;
+  const maxWidth = canvas.offsetWidth;
+  const maxHeight = canvas.offsetHeight;
+  nextWidth = snapDimensionWithin(nextWidth, MIN_WIDTH, maxWidth);
+  nextHeight = snapDimensionWithin(nextHeight, MIN_HEIGHT, maxHeight);
+  const left = parsePx(element.style.left, element.offsetLeft || 0);
+  const top = parsePx(element.style.top, element.offsetTop || 0);
+  const position = clampPosition(canvas, left, top, nextWidth, nextHeight);
+  element.style.width = `${nextWidth}px`;
+  element.style.height = `${nextHeight}px`;
+  element.style.left = `${position.x}px`;
+  element.style.top = `${position.y}px`;
+  syncPropertiesFormFromElement(element, ['width', 'height']);
+}
+
+function updateDropdownVisual(element) {
+  if (!element) return;
+  const label = element.querySelector('.wire-dropdown-label');
+  if (label) {
+    const text = element.dataset.label || 'Dropdown';
+    label.textContent = text;
+  }
+  const dropdown = element.querySelector('.wire-dropdown');
+  if (!dropdown) return;
+  dropdown.innerHTML = '';
+  const options = normaliseOptions(
+    element.dataset.options,
+    ['Option 1', 'Option 2', 'Option 3']
+  );
+  options.slice(0, 3).forEach((option, index) => {
+    const row = document.createElement('div');
+    row.className = 'wire-dropdown-option';
+    const marker = document.createElement('span');
+    marker.className = 'wire-dropdown-bullet';
+    marker.textContent = '◦';
+    const text = document.createElement('span');
+    text.className = 'wire-dropdown-text';
+    text.textContent = index === 0 ? option : `${option}`;
+    row.append(marker, text);
+    dropdown.appendChild(row);
+  });
+}
+
+function updateCardVisual(element) {
+  if (!element) return;
+  const card = element.querySelector('.wire-card');
+  if (!card) return;
+  const heading = card.querySelector('h3');
+  const body = card.querySelector('p');
+  const button = card.querySelector('.wire-button');
+  const title = element.dataset.title || 'Card title';
+  const description = element.dataset.body || 'Supporting description text goes here.';
+  const cta = element.dataset.cta || 'Action';
+  if (heading) heading.textContent = title;
+  if (body) body.textContent = description;
+  if (button) button.textContent = cta;
+}
+
+function updateRadioGroupVisual(element) {
+  if (!element) return;
+  const label = element.querySelector('.wire-radio-label');
+  if (label) {
+    label.textContent = element.dataset.label || 'Radio group';
+  }
+  const container = element.querySelector('.wire-radio-options');
+  if (!container) return;
+  container.innerHTML = '';
+  const options = normaliseOptions(element.dataset.options, ['Option A', 'Option B']);
+  options.forEach((option) => {
+    const row = document.createElement('div');
+    row.className = 'wire-radio-option';
+    const bullet = document.createElement('span');
+    bullet.className = 'wire-radio-bullet';
+    const text = document.createElement('span');
+    text.className = 'wire-radio-text';
+    text.textContent = option;
+    row.append(bullet, text);
+    container.appendChild(row);
+  });
+}
+
+function updateSliderVisual(element) {
+  if (!element) return;
+  const min = Number.parseFloat(element.dataset.min ?? '0');
+  const max = Number.parseFloat(element.dataset.max ?? '100');
+  let value = Number.parseFloat(element.dataset.value ?? '50');
+  let resolvedMin = Number.isFinite(min) ? min : 0;
+  let resolvedMax = Number.isFinite(max) ? max : 100;
+  if (resolvedMin === resolvedMax) {
+    resolvedMax = resolvedMin + 1;
+  } else if (resolvedMin > resolvedMax) {
+    const temp = resolvedMin;
+    resolvedMin = resolvedMax;
+    resolvedMax = temp;
+  }
+  if (!Number.isFinite(value)) {
+    value = (resolvedMin + resolvedMax) / 2;
+  }
+  value = Math.min(Math.max(value, resolvedMin), resolvedMax);
+  element.dataset.min = String(resolvedMin);
+  element.dataset.max = String(resolvedMax);
+  element.dataset.value = String(value);
+
+  const label = element.querySelector('.wire-slider-label');
+  if (label) {
+    label.textContent = element.dataset.label || 'Slider';
+  }
+  const valueLabel = element.querySelector('.wire-slider-value');
+  if (valueLabel) {
+    valueLabel.textContent = `${value}`;
+  }
+  const track = element.querySelector('.wire-slider-track');
+  const fill = element.querySelector('.wire-slider-fill');
+  const handle = element.querySelector('.wire-slider-handle');
+  if (!track || !handle || !fill) return;
+  const percent = ((value - resolvedMin) / (resolvedMax - resolvedMin)) * 100;
+  fill.style.width = `${percent}%`;
+  handle.style.left = `${percent}%`;
+}
+
+function getPropertySchemaForElement(element) {
+  if (!element) return [];
+  const type = element.dataset.type || '';
+  const specific = PROPERTY_SCHEMAS[type] || [];
+  return [...PROPERTY_SCHEMAS.common, ...specific];
+}
+
+function renderPropertiesForElement(element) {
+  if (!propertiesForm || !propertiesEmptyState) return;
+  propertyFieldRefs.clear();
+  activePropertySchema = [];
+  propertiesForm.innerHTML = '';
+
+  if (!element) {
+    propertiesForm.setAttribute('hidden', 'true');
+    propertiesEmptyState.removeAttribute('hidden');
+    propertiesEmptyState.textContent = 'Select an element to edit its basics.';
+    return;
+  }
+
+  const schema = getPropertySchemaForElement(element);
+  activePropertySchema = schema;
+  if (!schema.length) {
+    propertiesForm.setAttribute('hidden', 'true');
+    propertiesEmptyState.removeAttribute('hidden');
+    propertiesEmptyState.textContent = 'No editable properties for this element.';
+    return;
+  }
+
+  propertiesEmptyState.setAttribute('hidden', 'true');
+  propertiesForm.removeAttribute('hidden');
+
+  schema.forEach((definition) => {
+    const field = createPropertyField(definition, element);
+    propertiesForm.appendChild(field);
+  });
+}
+
+function createPropertyField(definition, element) {
+  const wrapper = document.createElement('div');
+  wrapper.className = definition.inline ? 'property-inline' : 'property-field';
+
+  const label = document.createElement('label');
+  label.textContent = definition.label;
+  const inputId = `property-${definition.id}`;
+  label.setAttribute('for', inputId);
+
+  let control;
+  if (definition.type === 'textarea') {
+    control = document.createElement('textarea');
+    if (definition.rows) {
+      control.rows = definition.rows;
+    }
+  } else {
+    control = document.createElement('input');
+    control.type = definition.type || 'text';
+  }
+  control.id = inputId;
+  control.value = formatPropertyValue(definition.get(element), control.type);
+  if (definition.min !== undefined) {
+    control.min = definition.min;
+  }
+  if (definition.max !== undefined) {
+    control.max = definition.max;
+  }
+  if (definition.placeholder) {
+    control.placeholder = definition.placeholder;
+  }
+  if (control.type === 'number') {
+    control.step = definition.step !== undefined ? definition.step : 1;
+  }
+
+  const eventName = control.tagName === 'TEXTAREA' ? 'input' : 'input';
+  control.addEventListener(eventName, (event) => {
+    if (selectedElement !== element) return;
+    if (control.type === 'number') {
+      const parsed = Number.parseFloat(event.target.value);
+      if (!Number.isFinite(parsed)) {
+        syncPropertiesFormFromElement(element, [definition.id]);
+        return;
+      }
+      definition.set(element, parsed);
+    } else {
+      definition.set(element, event.target.value);
+    }
+    syncPropertiesFormFromElement(element, [definition.id]);
+  });
+
+  propertyFieldRefs.set(definition.id, control);
+  wrapper.append(label, control);
+  return wrapper;
+}
+
+function formatPropertyValue(value, type) {
+  if (type === 'number') {
+    return Number.isFinite(value) ? String(value) : '';
+  }
+  if (value === null || value === undefined) return '';
+  return String(value);
+}
+
+function syncPropertiesFormFromElement(element, specificIds = null) {
+  if (!element || !activePropertySchema.length) return;
+  const ids = specificIds ? new Set(specificIds) : null;
+  activePropertySchema.forEach((definition) => {
+    if (ids && !ids.has(definition.id)) return;
+    const control = propertyFieldRefs.get(definition.id);
+    if (!control) return;
+    if (document.activeElement === control && (!ids || ids.size === 1)) {
+      return;
+    }
+    const value = definition.get(element);
+    control.value = formatPropertyValue(value, control.type);
+  });
+}
 
 function getCanvasScale(canvasEl) {
   if (!canvasEl) return 1;
@@ -184,6 +688,8 @@ function init() {
       scaleAllPreviewCanvases();
     }
   });
+
+  renderPropertiesForElement(null);
 
   const firstScreenId = createScreen('Screen 1');
   setActiveScreen(firstScreenId);
@@ -560,59 +1066,114 @@ function buildComponent(type) {
 
   switch (type) {
     case 'button': {
+      wrapper.dataset.label = 'Button';
       const button = document.createElement('div');
       button.className = 'wire-button';
-      button.textContent = 'Button';
+      button.textContent = wrapper.dataset.label;
       wrapper.appendChild(button);
       break;
     }
     case 'input': {
+      wrapper.dataset.placeholder = 'Input field';
       const input = document.createElement('div');
       input.className = 'wire-input';
-      input.textContent = 'Input field';
+      input.textContent = wrapper.dataset.placeholder;
       wrapper.appendChild(input);
       break;
     }
     case 'dropdown': {
+      wrapper.dataset.label = 'Dropdown';
+      wrapper.dataset.options = 'Option 1\nOption 2\nOption 3';
+      const label = document.createElement('div');
+      label.className = 'wire-dropdown-label';
       const dropdown = document.createElement('div');
       dropdown.className = 'wire-dropdown';
-      dropdown.textContent = 'Dropdown';
-      wrapper.appendChild(dropdown);
+      wrapper.append(label, dropdown);
+      updateDropdownVisual(wrapper);
       break;
     }
     case 'card': {
+      wrapper.dataset.title = 'Card title';
+      wrapper.dataset.body = 'Supporting description text goes here.';
+      wrapper.dataset.cta = 'Action';
       const card = document.createElement('div');
       card.className = 'wire-card';
       const heading = document.createElement('h3');
-      heading.textContent = 'Card title';
       const body = document.createElement('p');
-      body.textContent = 'Supporting description text goes here.';
       const button = document.createElement('div');
       button.className = 'wire-button';
-      button.textContent = 'Action';
       card.append(heading, body, button);
       wrapper.appendChild(card);
+      updateCardVisual(wrapper);
       break;
     }
     case 'heading': {
+      wrapper.dataset.text = 'Heading';
       const heading = document.createElement('div');
       heading.className = 'wire-heading';
-      heading.textContent = 'Heading';
+      heading.textContent = wrapper.dataset.text;
       wrapper.appendChild(heading);
       break;
     }
     case 'paragraph': {
+      wrapper.dataset.text = 'Lorem ipsum placeholder copy for quick wireframes.';
       const paragraph = document.createElement('div');
       paragraph.className = 'wire-paragraph';
-      paragraph.textContent = 'Lorem ipsum placeholder copy for quick wireframes.';
+      paragraph.textContent = wrapper.dataset.text;
       wrapper.appendChild(paragraph);
       break;
     }
     case 'image': {
+      wrapper.dataset.label = 'Image';
       const image = document.createElement('div');
       image.className = 'wire-image';
-      image.textContent = 'Image';
+      image.textContent = wrapper.dataset.label;
       wrapper.appendChild(image);
+      break;
+    }
+    case 'text': {
+      wrapper.dataset.text = 'Sample text';
+      const textBlock = document.createElement('div');
+      textBlock.className = 'wire-text';
+      textBlock.textContent = wrapper.dataset.text;
+      wrapper.appendChild(textBlock);
+      break;
+    }
+    case 'radio-group': {
+      wrapper.dataset.label = 'Radio group';
+      wrapper.dataset.options = 'Option A\nOption B';
+      const label = document.createElement('div');
+      label.className = 'wire-radio-label';
+      const body = document.createElement('p');
+      body.className = 'wire-radio-options';
+      wrapper.append(label, body);
+      updateRadioGroupVisual(wrapper);
+      break;
+    }
+    case 'slider': {
+      wrapper.dataset.label = 'Slider';
+      wrapper.dataset.min = '0';
+      wrapper.dataset.max = '100';
+      wrapper.dataset.value = '50';
+      const slider = document.createElement('div');
+      slider.className = 'wire-slider';
+      const header = document.createElement('div');
+      header.className = 'wire-slider-header';
+      const label = document.createElement('span');
+      label.className = 'wire-slider-label';
+      const value = document.createElement('span');
+      value.className = 'wire-slider-value';
+      header.append(label, value);
+      const track = document.createElement('div');
+      track.className = 'wire-slider-track';
+      const fill = document.createElement('div');
+      fill.className = 'wire-slider-fill';
+      const handle = document.createElement('div');
+      handle.className = 'wire-slider-handle';
+      track.append(fill, handle);
+      slider.append(header, track);
+      wrapper.appendChild(slider);
+      updateSliderVisual(wrapper);
       break;
     }
     default: {
@@ -834,6 +1395,7 @@ function resizeElement(event) {
   element.style.height = `${height}px`;
   element.style.left = `${finalPosition.x}px`;
   element.style.top = `${finalPosition.y}px`;
+  syncPropertiesFormFromElement(element, ['width', 'height']);
 }
 
 function clampPosition(canvasEl, x, y, width, height) {
@@ -1031,6 +1593,7 @@ function refreshSelectionBar() {
   clearLinkBtn.disabled = !hasSelection;
   if (!hasSelection) {
     selectionLabel.textContent = 'No element selected';
+    renderPropertiesForElement(null);
     if (!isUpdatingLinkSelect) {
       isUpdatingLinkSelect = true;
       linkSelect.value = '';
@@ -1038,6 +1601,7 @@ function refreshSelectionBar() {
     }
     return;
   }
+  renderPropertiesForElement(selectedElement);
   const targetId = selectedElement.dataset.targetScreen;
   if (targetId && screens.has(targetId)) {
     selectionLabel.textContent = `${formatElementLabel(selectedElement)} -> ${screens.get(targetId).name}`;
@@ -1205,8 +1769,8 @@ function createPreviewCanvas(screenData) {
     if (targetScreen) {
       const buttons = previewItem.querySelectorAll('button');
       const select = previewItem.querySelector('select');
-      const input = previewItem.querySelector('input');
-      if (!select && !input) {
+      const inputs = previewItem.querySelectorAll('input');
+      if (!select && !inputs.length) {
         attachPreviewNavigation(previewItem, targetScreen);
       }
       buttons.forEach((button) => {
@@ -1215,14 +1779,18 @@ function createPreviewCanvas(screenData) {
       if (select) {
         attachPreviewNavigation(select, targetScreen, 'change');
       }
-      if (input) {
-        input.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            handlePreviewNavigation(targetScreen);
-          }
-        });
-      }
+      inputs.forEach((input) => {
+        if (input.type === 'radio' || input.type === 'checkbox' || input.type === 'range') {
+          attachPreviewNavigation(input, targetScreen, 'change');
+        } else {
+          input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              handlePreviewNavigation(targetScreen);
+            }
+          });
+        }
+      });
     }
 
     canvas.appendChild(previewItem);
@@ -1234,62 +1802,158 @@ function createPreviewCanvas(screenData) {
 function buildPreviewElement(source) {
   const type = source.dataset.type;
   const textContent = source.textContent.trim();
-  const fallback = (value, defaultValue) => (value && value.trim()) || defaultValue;
+  const fallback = (value, defaultValue) => (value && value.toString().trim()) || defaultValue;
 
   switch (type) {
     case 'button': {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = fallback(source.querySelector('.wire-button')?.textContent, 'Button');
+      const label = source.dataset.label || source.querySelector('.wire-button')?.textContent;
+      button.textContent = fallback(label, 'Button');
       return button;
     }
     case 'input': {
       const input = document.createElement('input');
       input.type = 'text';
-      input.placeholder = fallback(textContent, 'Input field');
+      const placeholder = source.dataset.placeholder || textContent;
+      input.placeholder = fallback(placeholder, 'Input field');
       return input;
     }
     case 'dropdown': {
       const select = document.createElement('select');
-      const baseLabel = fallback(textContent, 'Select option');
-      ['Option 1', 'Option 2', 'Option 3'].forEach((label, index) => {
+      const options = normaliseOptions(
+        source.dataset.options,
+        ['Option 1', 'Option 2', 'Option 3']
+      );
+      options.forEach((label, index) => {
         const option = document.createElement('option');
         option.value = `${index + 1}`;
-        option.textContent = index === 0 ? baseLabel : `${baseLabel} ${index + 1}`;
+        option.textContent = label;
         select.appendChild(option);
       });
+      if (!options.length) {
+        const option = document.createElement('option');
+        option.value = '1';
+        option.textContent = fallback(textContent, 'Select option');
+        select.appendChild(option);
+      }
       return select;
     }
     case 'card': {
       const card = document.createElement('div');
       card.className = 'preview-card';
-      const heading = document.createElement('h3');
-      heading.textContent = fallback(source.querySelector('h3')?.textContent, 'Card title');
-      const body = document.createElement('p');
-      body.textContent = fallback(source.querySelector('p')?.textContent, 'Supporting description text goes here.');
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = fallback(source.querySelector('.wire-button')?.textContent, 'Action');
-      card.append(heading, body, button);
+      const headingEl = document.createElement('h3');
+      const headingText = source.dataset.title || source.querySelector('h3')?.textContent;
+      headingEl.textContent = fallback(headingText, 'Card title');
+      const bodyEl = document.createElement('p');
+      const bodyText = source.dataset.body || source.querySelector('p')?.textContent;
+      bodyEl.textContent = fallback(bodyText, 'Supporting description text goes here.');
+      const buttonEl = document.createElement('button');
+      buttonEl.type = 'button';
+      const ctaText = source.dataset.cta || source.querySelector('.wire-button')?.textContent;
+      buttonEl.textContent = fallback(ctaText, 'Action');
+      card.append(headingEl, bodyEl, buttonEl);
       return card;
     }
     case 'heading': {
       const heading = document.createElement('div');
       heading.className = 'preview-heading';
-      heading.textContent = fallback(textContent, 'Heading');
+      const headingText = source.dataset.text || textContent;
+      heading.textContent = fallback(headingText, 'Heading');
       return heading;
     }
     case 'paragraph': {
       const paragraph = document.createElement('p');
       paragraph.className = 'preview-paragraph';
-      paragraph.textContent = fallback(textContent, 'Placeholder copy for quick wireframes.');
+      const paragraphText = source.dataset.text || textContent;
+      paragraph.textContent = fallback(paragraphText, 'Placeholder copy for quick wireframes.');
       return paragraph;
     }
     case 'image': {
       const image = document.createElement('div');
       image.className = 'preview-image';
-      image.textContent = fallback(textContent, 'Image');
+      const label = source.dataset.label || textContent;
+      image.textContent = fallback(label, 'Image');
       return image;
+    }
+    case 'text': {
+      const paragraph = document.createElement('p');
+      paragraph.className = 'preview-paragraph';
+      const text = source.dataset.text || textContent;
+      paragraph.textContent = fallback(text, 'Sample text');
+      return paragraph;
+    }
+    case 'radio-group': {
+      const fieldset = document.createElement('fieldset');
+      fieldset.className = 'preview-radio-group';
+      const legend = document.createElement('legend');
+      const label = source.dataset.label || textContent || 'Radio group';
+      legend.textContent = fallback(label, 'Radio group');
+      fieldset.appendChild(legend);
+      const groupName = `radio-${Math.random().toString(16).slice(2, 8)}`;
+      const options = normaliseOptions(source.dataset.options, ['Option A', 'Option B']);
+      options.forEach((option, index) => {
+        const row = document.createElement('label');
+        row.className = 'preview-radio-option';
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = groupName;
+        input.value = option || `option-${index + 1}`;
+        const span = document.createElement('span');
+        span.textContent = option;
+        row.append(input, span);
+        fieldset.appendChild(row);
+      });
+      if (!options.length) {
+        const row = document.createElement('label');
+        row.className = 'preview-radio-option';
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = groupName;
+        input.value = 'option-1';
+        const span = document.createElement('span');
+        span.textContent = 'Option';
+        row.append(input, span);
+        fieldset.appendChild(row);
+      }
+      return fieldset;
+    }
+    case 'slider': {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'preview-slider';
+      const header = document.createElement('div');
+      header.className = 'preview-slider-header';
+      const label = document.createElement('span');
+      label.className = 'preview-slider-label';
+      const labelText = source.dataset.label || textContent || 'Slider';
+      label.textContent = fallback(labelText, 'Slider');
+      const valueBadge = document.createElement('span');
+      valueBadge.className = 'preview-slider-value';
+      header.append(label, valueBadge);
+      const input = document.createElement('input');
+      input.type = 'range';
+      const min = Number.parseFloat(source.dataset.min ?? '0');
+      const max = Number.parseFloat(source.dataset.max ?? '100');
+      const value = Number.parseFloat(source.dataset.value ?? '50');
+      const safeMin = Number.isFinite(min) ? min : 0;
+      const safeMax = Number.isFinite(max) && max !== safeMin ? max : safeMin + 100;
+      let safeValue = Number.isFinite(value) ? value : (safeMin + safeMax) / 2;
+      if (safeMin > safeMax) {
+        const tempMax = safeMin;
+        input.min = String(safeMax);
+        input.max = String(tempMax);
+      } else {
+        input.min = String(safeMin);
+        input.max = String(safeMax);
+      }
+      safeValue = Math.min(Math.max(safeValue, Number.parseFloat(input.min)), Number.parseFloat(input.max));
+      input.value = String(safeValue);
+      valueBadge.textContent = input.value;
+      input.addEventListener('input', () => {
+        valueBadge.textContent = input.value;
+      });
+      wrapper.append(header, input);
+      return wrapper;
     }
     default: {
       const box = document.createElement('div');
