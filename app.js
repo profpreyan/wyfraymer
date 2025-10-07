@@ -65,6 +65,92 @@ const COMPONENT_DEFAULTS = {
   image: { width: 200, height: 160 }
 };
 
+let scaleFrameId = null;
+let layoutObserver = null;
+
+function getCanvasScale(canvasEl) {
+  if (!canvasEl) return 1;
+  const scale = parseFloat(canvasEl.dataset?.scale);
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+function scheduleCanvasScale(canvasEl) {
+  if (!canvasEl) return;
+  if (scaleFrameId) {
+    cancelAnimationFrame(scaleFrameId);
+  }
+  scaleFrameId = window.requestAnimationFrame(() => {
+    scaleFrameId = null;
+    applyCanvasScale(canvasEl);
+  });
+}
+
+function applyCanvasScale(canvasEl) {
+  if (!canvasEl) return;
+
+  const container = canvasEl.closest('.canvas-container');
+  if (!container) return;
+
+  const width = canvasEl.offsetWidth;
+  const height = canvasEl.offsetHeight;
+
+  if (!width || !height) {
+    canvasEl.dataset.scale = '1';
+    canvasEl.style.transform = 'scale(1)';
+    canvasEl.style.position = '';
+    canvasEl.style.top = '';
+    canvasEl.style.left = '';
+    container.style.height = '';
+    return;
+  }
+
+  const containerStyles = window.getComputedStyle(container);
+  const paddingLeft = parseFloat(containerStyles.paddingLeft || '0');
+  const paddingRight = parseFloat(containerStyles.paddingRight || '0');
+  const paddingTop = parseFloat(containerStyles.paddingTop || '0');
+  const paddingBottom = parseFloat(containerStyles.paddingBottom || '0');
+
+  let availableWidth = container.clientWidth - (paddingLeft + paddingRight);
+  if (!Number.isFinite(availableWidth) || availableWidth <= 0) {
+    availableWidth = width;
+  }
+
+  const containerRect = container.getBoundingClientRect();
+  const viewportAvailable = window.innerHeight - containerRect.top - paddingTop - paddingBottom - 16;
+  let availableHeight = Number.isFinite(viewportAvailable) ? viewportAvailable : height;
+  const footer = document.querySelector('.status-bar');
+  if (footer) {
+    const footerRect = footer.getBoundingClientRect();
+    const footerAvailable = footerRect.top - containerRect.top - paddingTop - paddingBottom - 16;
+    if (Number.isFinite(footerAvailable)) {
+      availableHeight = Math.min(availableHeight, footerAvailable);
+    }
+  }
+  if (!Number.isFinite(availableHeight) || availableHeight <= 0) {
+    availableHeight = Number.isFinite(viewportAvailable) && viewportAvailable > 0
+      ? viewportAvailable
+      : 120;
+  }
+
+  const rawScale = Math.min(1, availableWidth / width, availableHeight / height);
+  const scale = Number.isFinite(rawScale) && rawScale > 0 ? rawScale : 1;
+
+  const scaledHeight = height * scale;
+  const targetHeight = Math.max(scaledHeight + paddingTop + paddingBottom, 0);
+  const currentHeight = parseFloat(container.style.height || '0');
+  if (!Number.isFinite(currentHeight) || Math.abs(currentHeight - targetHeight) > 0.5) {
+    container.style.height = `${targetHeight}px`;
+  }
+
+  canvasEl.dataset.scale = String(scale);
+  canvasEl.style.position = 'absolute';
+  canvasEl.style.top = `${paddingTop}px`;
+  canvasEl.style.left = `${paddingLeft}px`;
+  canvasEl.style.transformOrigin = 'top left';
+  canvasEl.style.transform = `scale(${scale})`;
+  canvasEl.style.margin = '0';
+}
+
 function init() {
   attachPaletteEvents();
   attachGlobalEvents();
@@ -73,6 +159,19 @@ function init() {
   attachHelpModal();
   attachSelectionControls();
   attachPreviewControls();
+  if (typeof ResizeObserver !== 'undefined' && canvasContainer) {
+    layoutObserver = new ResizeObserver(() => {
+      if (activeScreenId && screens.has(activeScreenId)) {
+        scheduleCanvasScale(screens.get(activeScreenId).canvas);
+      }
+    });
+    layoutObserver.observe(canvasContainer);
+  }
+  window.addEventListener('resize', () => {
+    if (activeScreenId && screens.has(activeScreenId)) {
+      scheduleCanvasScale(screens.get(activeScreenId).canvas);
+    }
+  });
 
   const firstScreenId = createScreen('Screen 1');
   setActiveScreen(firstScreenId);
@@ -99,8 +198,9 @@ function attachCanvasEvents(canvasEl) {
     const type = event.dataTransfer.getData('text/plain');
     if (!type) return;
     const rect = canvasEl.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const scale = getCanvasScale(canvasEl);
+    const x = (event.clientX - rect.left) / scale;
+    const y = (event.clientY - rect.top) / scale;
     addComponentToCanvas(canvasEl, type, x, y);
   });
 
@@ -347,6 +447,7 @@ function setActiveScreen(id) {
 
   const active = screens.get(id);
   active.canvas.style.display = 'block';
+  scheduleCanvasScale(active.canvas);
   screenDropdown.value = id;
   updateSizeControls(active.width, active.height, active.presetKey);
   refreshSelectionBar();
@@ -416,6 +517,7 @@ function createCanvasElement(id) {
   canvasEl.id = id;
   canvasEl.setAttribute('tabindex', '0');
   canvasEl.setAttribute('aria-label', 'Wireframe canvas');
+  canvasEl.dataset.scale = '1';
   attachCanvasEvents(canvasEl);
   return canvasEl;
 }
@@ -600,22 +702,23 @@ function clearSelection() {
 function startDrag(element, event) {
   const canvasEl = element.parentElement;
   const rect = element.getBoundingClientRect();
-  const canvasRect = canvasEl.getBoundingClientRect();
+  const scale = getCanvasScale(canvasEl);
   dragState = {
     element,
     canvas: canvasEl,
-    offsetX: event.clientX - rect.left,
-    offsetY: event.clientY - rect.top
+    offsetX: (event.clientX - rect.left) / scale,
+    offsetY: (event.clientY - rect.top) / scale
   };
 }
 
 function moveElement(event) {
   const { element, canvas, offsetX, offsetY } = dragState;
   const canvasRect = canvas.getBoundingClientRect();
+  const scale = getCanvasScale(canvas);
   const width = element.offsetWidth;
   const height = element.offsetHeight;
-  const x = event.clientX - canvasRect.left - offsetX;
-  const y = event.clientY - canvasRect.top - offsetY;
+  const x = (event.clientX - canvasRect.left) / scale - offsetX;
+  const y = (event.clientY - canvasRect.top) / scale - offsetY;
   const clamped = clampPosition(canvas, x, y, width, height);
   element.style.left = `${clamped.x}px`;
   element.style.top = `${clamped.y}px`;
@@ -624,14 +727,16 @@ function moveElement(event) {
 function startResize(element, direction, event) {
   const canvasEl = element.parentElement;
   const rect = element.getBoundingClientRect();
+  const canvasRect = canvasEl.getBoundingClientRect();
+  const scale = getCanvasScale(canvasEl);
   resizeState = {
     element,
     canvas: canvasEl,
     direction,
-    startWidth: rect.width,
-    startHeight: rect.height,
-    startLeft: rect.left,
-    startTop: rect.top
+    startWidth: element.offsetWidth,
+    startHeight: element.offsetHeight,
+    startLeft: (rect.left - canvasRect.left) / scale,
+    startTop: (rect.top - canvasRect.top) / scale
   };
 }
 
@@ -647,11 +752,12 @@ function resizeElement(event) {
   } = resizeState;
 
   const canvasRect = canvas.getBoundingClientRect();
-  const pointerX = event.clientX - canvasRect.left;
-  const pointerY = event.clientY - canvasRect.top;
+  const scale = getCanvasScale(canvas);
+  const pointerX = (event.clientX - canvasRect.left) / scale;
+  const pointerY = (event.clientY - canvasRect.top) / scale;
 
-  let left = startLeft - canvasRect.left;
-  let top = startTop - canvasRect.top;
+  let left = startLeft;
+  let top = startTop;
   let right = left + startWidth;
   let bottom = top + startHeight;
 
@@ -809,6 +915,7 @@ function setCanvasSize(width, height, screenId = activeScreenId, presetKey = nul
 
   if (screenId === activeScreenId) {
     updateSizeControls(width, height, keyToUse);
+    scheduleCanvasScale(screen.canvas);
   }
 }
 
