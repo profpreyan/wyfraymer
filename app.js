@@ -33,6 +33,15 @@ const previewCanvasContainer = document.getElementById('preview-canvas-container
 const closePreviewBtn = document.getElementById('close-preview');
 const previewModal = document.getElementById('preview-modal');
 const previewFullscreenBtn = document.getElementById('preview-fullscreen');
+const analysisButton = document.getElementById('analysis-button');
+const previewTitle = document.getElementById('preview-title');
+const previewModePreviewBtn = document.getElementById('preview-mode-preview');
+const previewModeAnalysisBtn = document.getElementById('preview-mode-analysis');
+const analysisPanel = document.getElementById('analysis-panel');
+const analysisMoveCount = document.getElementById('analysis-move-count');
+const analysisClickCount = document.getElementById('analysis-click-count');
+const analysisResetBtn = document.getElementById('analysis-reset');
+const analysisEmptyState = document.getElementById('analysis-panel-empty');
 
 let selectedElement = null;
 let dragState = null;
@@ -50,6 +59,15 @@ let isUpdatingLinkSelect = false;
 let previewActiveScreenId = null;
 let previousBodyOverflow = '';
 let previewLayoutObserver = null;
+let previewMode = 'preview';
+const previewInteractionData = new Map();
+let lastPointerSample = null;
+const analysisRenderQueue = new Set();
+let analysisRenderScheduled = false;
+const ANALYSIS_MAX_MOVE_POINTS = 1200;
+const ANALYSIS_MAX_CLICK_POINTS = 400;
+const ANALYSIS_MOVE_MIN_DISTANCE = 12;
+const ANALYSIS_MOVE_MIN_INTERVAL = 40;
 
 const screens = new Map();
 let screenCounter = 1;
@@ -908,7 +926,10 @@ function attachSelectionControls() {
 
 function attachPreviewControls() {
   if (previewButton) {
-    previewButton.addEventListener('click', openPreview);
+    previewButton.addEventListener('click', () => openPreview('preview'));
+  }
+  if (analysisButton) {
+    analysisButton.addEventListener('click', () => openPreview('analysis'));
   }
   if (closePreviewBtn) {
     closePreviewBtn.addEventListener('click', closePreview);
@@ -927,6 +948,23 @@ function attachPreviewControls() {
   }
   if (previewFullscreenBtn) {
     previewFullscreenBtn.addEventListener('click', togglePreviewFullscreen);
+  }
+  if (previewModePreviewBtn) {
+    previewModePreviewBtn.addEventListener('click', () => setPreviewMode('preview'));
+  }
+  if (previewModeAnalysisBtn) {
+    previewModeAnalysisBtn.addEventListener('click', () => setPreviewMode('analysis'));
+  }
+  if (analysisResetBtn) {
+    analysisResetBtn.addEventListener('click', resetAnalysisDataForCurrentScreen);
+  }
+  if (previewCanvasContainer) {
+    if (typeof window !== 'undefined' && 'PointerEvent' in window) {
+      previewCanvasContainer.addEventListener('pointermove', handlePreviewPointerMove);
+    } else {
+      previewCanvasContainer.addEventListener('mousemove', handlePreviewPointerMove);
+    }
+    previewCanvasContainer.addEventListener('click', handlePreviewClick, true);
   }
 }
 
@@ -1044,6 +1082,7 @@ function deleteActiveScreen() {
     screenToRemove.option.remove();
   }
   screens.delete(activeScreenId);
+  previewInteractionData.delete(screenToRemove.id);
   clearLinksToScreen(screenToRemove.id);
   refreshSelectionBar();
 
@@ -1734,13 +1773,233 @@ function isPreviewOpen() {
   return previewBackdrop && !previewBackdrop.classList.contains('hidden');
 }
 
-function openPreview() {
+function setPreviewMode(mode) {
+  const nextMode = mode === 'analysis' ? 'analysis' : 'preview';
+  if (previewMode === nextMode) {
+    applyPreviewModeUi();
+    if (nextMode === 'analysis') {
+      scheduleAnalysisRender(previewActiveScreenId);
+    }
+    return;
+  }
+  previewMode = nextMode;
+  applyPreviewModeUi();
+  if (previewMode === 'analysis') {
+    scheduleAnalysisRender(previewActiveScreenId);
+  }
+}
+
+function applyPreviewModeUi() {
+  const isOpen = isPreviewOpen();
+  const isAnalysis = previewMode === 'analysis';
+  if (previewTitle) {
+    previewTitle.textContent = isAnalysis ? 'Analysis' : 'Preview';
+  }
+  if (previewModePreviewBtn) {
+    previewModePreviewBtn.classList.toggle('active', !isAnalysis);
+    previewModePreviewBtn.setAttribute('aria-pressed', !isAnalysis ? 'true' : 'false');
+  }
+  if (previewModeAnalysisBtn) {
+    previewModeAnalysisBtn.classList.toggle('active', isAnalysis);
+    previewModeAnalysisBtn.setAttribute('aria-pressed', isAnalysis ? 'true' : 'false');
+  }
+  if (analysisPanel) {
+    analysisPanel.hidden = !isOpen || !isAnalysis;
+  }
+  updateAnalysisSummary();
+  updateAnalysisOverlayVisibility();
+  if (previewButton) {
+    previewButton.setAttribute('aria-pressed', isOpen && !isAnalysis ? 'true' : 'false');
+  }
+  if (analysisButton) {
+    analysisButton.setAttribute('aria-pressed', isOpen && isAnalysis ? 'true' : 'false');
+  }
+}
+
+function updateAnalysisOverlayVisibility() {
+  if (!previewCanvasContainer) return;
+  const overlays = previewCanvasContainer.querySelectorAll('.analysis-overlay');
+  overlays.forEach((overlay) => {
+    const isAnalysis = previewMode === 'analysis' && isPreviewOpen();
+    overlay.classList.toggle('visible', isAnalysis);
+    overlay.setAttribute('aria-hidden', isAnalysis ? 'false' : 'true');
+  });
+}
+
+function updateAnalysisSummary() {
+  if (!analysisMoveCount || !analysisClickCount) return;
+  const activeId = previewActiveScreenId;
+  const totals = getInteractionTotals(activeId);
+  analysisMoveCount.textContent = String(totals.moves);
+  analysisClickCount.textContent = String(totals.clicks);
+  if (analysisEmptyState) {
+    const shouldShow = previewMode === 'analysis' && isPreviewOpen() && totals.moves === 0 && totals.clicks === 0;
+    analysisEmptyState.hidden = !shouldShow;
+  }
+}
+
+function getInteractionState(screenId) {
+  if (!screenId) return null;
+  if (!previewInteractionData.has(screenId)) {
+    previewInteractionData.set(screenId, { moves: [], clicks: [] });
+  }
+  return previewInteractionData.get(screenId);
+}
+
+function getInteractionTotals(screenId) {
+  if (!screenId || !previewInteractionData.has(screenId)) {
+    return { moves: 0, clicks: 0 };
+  }
+  const data = previewInteractionData.get(screenId);
+  return {
+    moves: data.moves.length,
+    clicks: data.clicks.length
+  };
+}
+
+function resetAnalysisDataForCurrentScreen() {
+  if (!previewActiveScreenId) return;
+  if (previewInteractionData.has(previewActiveScreenId)) {
+    previewInteractionData.delete(previewActiveScreenId);
+  }
+  scheduleAnalysisRender(previewActiveScreenId);
+  updateAnalysisSummary();
+}
+
+function handlePreviewPointerMove(event) {
+  if (!isPreviewOpen() || previewMode !== 'preview') return;
+  if (typeof event.pointerType === 'string' && event.pointerType !== 'mouse') return;
+  const position = getPreviewEventCoordinates(event);
+  if (!position) return;
+  const now = performance.now();
+  if (lastPointerSample && lastPointerSample.screenId === position.screenId) {
+    const elapsed = now - lastPointerSample.time;
+    const distance = Math.hypot(position.x - lastPointerSample.x, position.y - lastPointerSample.y);
+    if (elapsed < ANALYSIS_MOVE_MIN_INTERVAL && distance < ANALYSIS_MOVE_MIN_DISTANCE) {
+      return;
+    }
+  }
+  lastPointerSample = { ...position, time: now };
+  recordPreviewMove(position.screenId, position.x, position.y);
+}
+
+function handlePreviewClick(event) {
+  if (!isPreviewOpen() || previewMode !== 'preview') return;
+  const position = getPreviewEventCoordinates(event);
+  if (!position) return;
+  recordPreviewClick(position.screenId, position.x, position.y);
+}
+
+function getPreviewEventCoordinates(event) {
+  if (!previewCanvasContainer) return null;
+  const canvas = event.target.closest('.preview-canvas');
+  if (!canvas) return null;
+  const screenId = canvas.dataset.screenId;
+  if (!screenId || !screens.has(screenId)) return null;
+  const rect = canvas.getBoundingClientRect();
+  const scale = parseFloat(canvas.dataset.scale) || 1;
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  const x = (event.clientX - rect.left) / scale;
+  const y = (event.clientY - rect.top) / scale;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { canvas, screenId, x, y };
+}
+
+function recordPreviewMove(screenId, x, y) {
+  const state = getInteractionState(screenId);
+  if (!state) return;
+  state.moves.push({ x, y });
+  if (state.moves.length > ANALYSIS_MAX_MOVE_POINTS) {
+    state.moves.splice(0, state.moves.length - ANALYSIS_MAX_MOVE_POINTS);
+  }
+  scheduleAnalysisRender(screenId);
+  updateAnalysisSummary();
+}
+
+function recordPreviewClick(screenId, x, y) {
+  const state = getInteractionState(screenId);
+  if (!state) return;
+  state.clicks.push({ x, y });
+  if (state.clicks.length > ANALYSIS_MAX_CLICK_POINTS) {
+    state.clicks.splice(0, state.clicks.length - ANALYSIS_MAX_CLICK_POINTS);
+  }
+  scheduleAnalysisRender(screenId);
+  updateAnalysisSummary();
+}
+
+function scheduleAnalysisRender(screenId) {
+  if (!screenId) return;
+  analysisRenderQueue.add(screenId);
+  if (analysisRenderScheduled) return;
+  analysisRenderScheduled = true;
+  window.requestAnimationFrame(() => {
+    analysisRenderQueue.forEach((id) => renderAnalysisForScreen(id));
+    analysisRenderQueue.clear();
+    analysisRenderScheduled = false;
+  });
+}
+
+function renderAnalysisForScreen(screenId) {
+  if (!previewCanvasContainer) return;
+  const overlay = previewCanvasContainer.querySelector(`.analysis-overlay[data-screen-id="${screenId}"]`);
+  if (!overlay) return;
+  const ctx = overlay.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  const data = previewInteractionData.get(screenId);
+  if (!data) return;
+  data.moves.forEach(({ x, y }) => {
+    drawHeatPoint(ctx, x, y);
+  });
+  data.clicks.forEach(({ x, y }) => {
+    drawClickMarker(ctx, x, y);
+  });
+}
+
+function drawHeatPoint(ctx, x, y) {
+  const radius = 56;
+  const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+  gradient.addColorStop(0, 'rgba(255, 87, 34, 0.55)');
+  gradient.addColorStop(0.6, 'rgba(255, 87, 34, 0.25)');
+  gradient.addColorStop(1, 'rgba(255, 87, 34, 0)');
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawClickMarker(ctx, x, y) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(227, 35, 24, 0.9)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, 14, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x, y, 5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(227, 35, 24, 0.55)';
+  ctx.fill();
+  ctx.restore();
+}
+
+function openPreview(mode = 'preview') {
   if (!previewBackdrop || !previewCanvasContainer || !previewScreenSelect) return;
-  if (isPreviewOpen()) return;
   if (!screens.size) return;
+  const requestedMode = mode === 'analysis' ? 'analysis' : 'preview';
+  if (isPreviewOpen()) {
+    setPreviewMode(requestedMode);
+    const focusTarget = requestedMode === 'analysis'
+      ? (previewModeAnalysisBtn || analysisPanel || previewScreenSelect)
+      : previewScreenSelect;
+    if (focusTarget && typeof focusTarget.focus === 'function') {
+      focusTarget.focus({ preventScroll: true });
+    }
+    return;
+  }
   if (isHelpOpen()) {
     closeHelpModal();
   }
+  previewMode = requestedMode;
   updatePreviewFullscreenUi(false);
   if (!previewActiveScreenId || !screens.has(previewActiveScreenId)) {
     previewActiveScreenId = activeScreenId || screens.keys().next().value;
@@ -1749,12 +2008,18 @@ function openPreview() {
   previousBodyOverflow = document.body.style.overflow;
   document.body.style.overflow = 'hidden';
   previewBackdrop.classList.remove('hidden');
-  if (previewButton) {
-    previewButton.setAttribute('aria-pressed', 'true');
+  applyPreviewModeUi();
+  const focusTarget = requestedMode === 'analysis'
+    ? (previewModeAnalysisBtn || analysisPanel || previewScreenSelect)
+    : previewScreenSelect;
+  if (focusTarget && typeof focusTarget.focus === 'function') {
+    focusTarget.focus({ preventScroll: true });
   }
-  previewScreenSelect.focus();
   window.requestAnimationFrame(() => {
     scaleAllPreviewCanvases();
+    if (previewMode === 'analysis') {
+      scheduleAnalysisRender(previewActiveScreenId);
+    }
   });
 }
 
@@ -1769,11 +2034,13 @@ function closePreview() {
     previewScreenSelect.innerHTML = '';
   }
   document.body.style.overflow = previousBodyOverflow;
-  if (previewButton) {
-    previewButton.setAttribute('aria-pressed', 'false');
-    previewButton.focus({ preventScroll: true });
-  }
+  lastPointerSample = null;
   previewActiveScreenId = null;
+  applyPreviewModeUi();
+  const focusTarget = previewMode === 'analysis' ? analysisButton : previewButton;
+  if (focusTarget && typeof focusTarget.focus === 'function') {
+    focusTarget.focus({ preventScroll: true });
+  }
 }
 
 function buildPreviewScreens() {
@@ -1799,6 +2066,12 @@ function buildPreviewScreens() {
 
   previewScreenSelect.value = previewActiveScreenId;
   activatePreviewScreen(previewActiveScreenId);
+  if (isPreviewOpen()) {
+    applyPreviewModeUi();
+    if (previewMode === 'analysis') {
+      scheduleAnalysisRender(previewActiveScreenId);
+    }
+  }
 }
 
 function activatePreviewScreen(screenId) {
@@ -1815,6 +2088,9 @@ function activatePreviewScreen(screenId) {
     }
   });
   scaleAllPreviewCanvases();
+  scheduleAnalysisRender(screenId);
+  updateAnalysisSummary();
+  updateAnalysisOverlayVisibility();
 }
 
 function createPreviewCanvas(screenData) {
@@ -1878,6 +2154,16 @@ function createPreviewCanvas(screenData) {
 
     canvas.appendChild(previewItem);
   });
+
+  const overlay = document.createElement('canvas');
+  overlay.className = 'analysis-overlay';
+  overlay.dataset.screenId = screenData.id;
+  overlay.width = screenData.width;
+  overlay.height = screenData.height;
+  overlay.setAttribute('aria-hidden', 'true');
+  overlay.style.width = '100%';
+  overlay.style.height = '100%';
+  canvas.appendChild(overlay);
 
   return wrapper;
 }
