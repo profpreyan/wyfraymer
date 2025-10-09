@@ -959,6 +959,7 @@ function createScreen(name) {
   screens.set(id, screenData);
   screenCounter += 1;
   refreshSelectionBar();
+  refreshLinkSelectOptions();
   return id;
 }
 
@@ -980,6 +981,7 @@ function setActiveScreen(id) {
   screenDropdown.value = id;
   updateSizeControls(active.width, active.height, active.presetKey);
   refreshSelectionBar();
+  refreshLinkSelectOptions();
 }
 
 function renameActiveScreen() {
@@ -998,6 +1000,7 @@ function renameActiveScreen() {
   if (isPreviewOpen()) {
     buildPreviewScreens();
   }
+  refreshLinkSelectOptions();
 }
 
 function duplicateActiveScreen() {
@@ -1013,6 +1016,7 @@ function duplicateActiveScreen() {
   setCanvasSize(source.width, source.height, newScreenId, source.presetKey);
   copyScreenContents(source.canvas, target.canvas);
   setActiveScreen(newScreenId);
+  refreshLinkSelectOptions();
 }
 
 function deleteActiveScreen() {
@@ -1056,6 +1060,7 @@ function deleteActiveScreen() {
     const newScreenId = createScreen(`Screen ${screenCounter}`);
     setActiveScreen(newScreenId);
   }
+  refreshLinkSelectOptions();
 }
 
 function createCanvasElement(id) {
@@ -1247,8 +1252,15 @@ function makeSelectable(element) {
     if (event.target.classList.contains('resize-handle')) return;
     if (element.classList.contains('editing')) return;
     event.preventDefault();
-    selectElement(element);
-    startDrag(element, event);
+    let target = element;
+    if (event.altKey) {
+      const duplicate = duplicateWireItem(element);
+      if (duplicate) {
+        target = duplicate;
+      }
+    }
+    selectElement(target);
+    startDrag(target, event);
   });
 
   element.addEventListener('focus', () => {
@@ -1441,6 +1453,41 @@ function removeSelectedElement() {
   refreshSelectionBar();
 }
 
+function duplicateWireItem(sourceElement) {
+  if (!sourceElement || !sourceElement.parentElement) return null;
+  const canvas = sourceElement.parentElement;
+  const clone = sourceElement.cloneNode(true);
+  clone.classList.remove('selected', 'editing');
+  clone.removeAttribute('contenteditable');
+  removeHandles(clone);
+
+  let width = snapDimensionWithin(sourceElement.offsetWidth, MIN_WIDTH, canvas.offsetWidth);
+  let height = snapDimensionWithin(sourceElement.offsetHeight, MIN_HEIGHT, canvas.offsetHeight);
+  const left = parseFloat(sourceElement.style.left) || 0;
+  const top = parseFloat(sourceElement.style.top) || 0;
+  const position = clampPosition(canvas, left, top, width, height);
+
+  const widthLimit = canvas.offsetWidth - position.x;
+  const heightLimit = canvas.offsetHeight - position.y;
+  width = snapDimensionWithin(width, MIN_WIDTH, widthLimit);
+  height = snapDimensionWithin(height, MIN_HEIGHT, heightLimit);
+
+  clone.style.width = `${width}px`;
+  clone.style.height = `${height}px`;
+  clone.style.left = `${position.x}px`;
+  clone.style.top = `${position.y}px`;
+
+  if (sourceElement.dataset.targetScreen && screens.has(sourceElement.dataset.targetScreen)) {
+    clone.dataset.targetScreen = sourceElement.dataset.targetScreen;
+  } else {
+    delete clone.dataset.targetScreen;
+  }
+
+  configureWireItem(clone);
+  canvas.appendChild(clone);
+  return clone;
+}
+
 function copySelectedElement() {
   if (!selectedElement) return;
   const clone = selectedElement.cloneNode(true);
@@ -1612,18 +1659,25 @@ function clearLinksToScreen(screenId) {
 }
 
 function refreshSelectionBar() {
-  if (!selectionBar || !linkSelect || !selectionLabel || !clearLinkBtn) return;
+  if (!selectionLabel) return;
   const hasSelection = Boolean(selectedElement);
-  selectionBar.classList.toggle('inactive', !hasSelection);
-  if (linkControls) {
-    linkControls.hidden = !hasSelection;
+  if (selectionBar) {
+    selectionBar.classList.toggle('inactive', !hasSelection);
   }
-  linkSelect.disabled = !hasSelection;
-  clearLinkBtn.disabled = !hasSelection;
+  if (linkControls) {
+    linkControls.classList.toggle('disabled', !hasSelection);
+    linkControls.setAttribute('aria-disabled', hasSelection ? 'false' : 'true');
+  }
+  if (linkSelect) {
+    linkSelect.disabled = !hasSelection;
+  }
+  if (clearLinkBtn) {
+    clearLinkBtn.disabled = !hasSelection;
+  }
   if (!hasSelection) {
     selectionLabel.textContent = 'No element selected';
     renderPropertiesForElement(null);
-    if (!isUpdatingLinkSelect) {
+    if (linkSelect && !isUpdatingLinkSelect) {
       isUpdatingLinkSelect = true;
       linkSelect.value = '';
       isUpdatingLinkSelect = false;

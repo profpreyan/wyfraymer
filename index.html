@@ -59,12 +59,12 @@
         <button class="palette-item" draggable="true" data-type="slider" type="button">Slider</button>
       </div>
 
-      <section class="properties-panel" aria-labelledby="properties-title">
-        <h3 id="properties-title">Properties</h3>
-        <p id="properties-empty" class="properties-empty">Select an element to edit its basics.</p>
-        <form id="properties-form" class="properties-form" autocomplete="off"></form>
-        <div id="link-controls" class="link-controls" hidden>
-          <h4>Interactions</h4>
+      <section class="link-panel" aria-labelledby="link-panel-title">
+        <h3 id="link-panel-title">Interactions</h3>
+        <div id="selection-bar" class="selection-bar inactive" aria-live="polite">
+          <p id="selection-label" class="selection-summary">No element selected</p>
+        </div>
+        <div id="link-controls" class="link-controls" aria-live="polite">
           <label for="link-select">On click go to:</label>
           <div class="link-control-row">
             <select id="link-select">
