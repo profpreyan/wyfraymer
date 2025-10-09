@@ -31,16 +31,37 @@
       <div class="screen-management">
         <label for="screen-select">Screen:</label>
         <select id="screen-select"></select>
-        <button id="rename-screen" type="button" title="Rename current screen">Rename</button>
-        <button id="add-screen" type="button" title="Add screen">+ Screen</button>
-        <button id="duplicate-screen" type="button" title="Duplicate current screen">Duplicate</button>
-        <button id="delete-screen" type="button" title="Delete current screen">Delete</button>
+        <button id="add-screen" class="icon-button" type="button" title="Add screen" aria-label="Add screen">
+          <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <path d="M9 4a1 1 0 1 1 2 0v5h5a1 1 0 1 1 0 2h-5v5a1 1 0 1 1-2 0v-5H4a1 1 0 1 1 0-2h5z" />
+          </svg>
+          <span class="visually-hidden">Add screen</span>
+        </button>
+        <button id="duplicate-screen" class="icon-button" type="button" title="Duplicate current screen" aria-label="Duplicate current screen">
+          <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <path d="M6 5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v7h-2V5H8v2H6z" />
+            <path d="M4 8a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
+          </svg>
+          <span class="visually-hidden">Duplicate screen</span>
+        </button>
+        <button id="delete-screen" class="icon-button" type="button" title="Delete current screen" aria-label="Delete current screen">
+          <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <path d="M7.22 6.47a.75.75 0 0 1 1.06 0L10 8.19l1.72-1.72a.75.75 0 0 1 1.06 1.06L11.06 9.25l1.72 1.72a.75.75 0 1 1-1.06 1.06L10 10.31l-1.72 1.72a.75.75 0 1 1-1.06-1.06l1.72-1.72-1.72-1.72a.75.75 0 0 1 0-1.06z" />
+            <path d="M15 4h-3.5l-.44-.88A1 1 0 0 0 10.17 3H7a1 1 0 0 0-.9.56L5.7 5H4a1 1 0 1 0 0 2h11a1 1 0 1 0 0-2zM6 8h8v7a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8z" />
+          </svg>
+          <span class="visually-hidden">Delete screen</span>
+        </button>
       </div>
     </div>
     <div class="header-actions">
       <button id="preview-button" class="preview-button" type="button" aria-pressed="false">Preview</button>
       <button id="analysis-button" class="analysis-button" type="button" aria-pressed="false">Analysis</button>
-      <button id="help-button" class="help-button" type="button">Help &amp; Tips</button>
+      <button id="help-button" class="help-button icon-button" type="button" title="Help &amp; Tips" aria-label="Help &amp; Tips">
+        <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <path d="M10 2a8 8 0 1 1 0 16A8 8 0 0 1 10 2zm0 2a6 6 0 1 0 0 12A6 6 0 0 0 10 4zm0 8a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm.12-7c1.4 0 2.38.84 2.38 2.03 0 .89-.44 1.48-1.4 2.07-.76.44-1.04.8-1.04 1.3V11h-1.5v-.72c0-1.02.54-1.66 1.39-2.16.74-.44.97-.74.97-1.16 0-.48-.38-.8-.95-.8-.58 0-.98.34-1.09.9l-1.46-.32C7.7 5.27 8.68 4 10.12 4z" />
+        </svg>
+        <span class="visually-hidden">Help &amp; Tips</span>
+      </button>
     </div>
   </header>
 
@@ -87,6 +108,7 @@
   </footer> -->
 
   <div id="modal-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
+  <div id="dialog-backdrop" class="modal-backdrop hidden" aria-hidden="true"></div>
 
   <div id="help-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
     <div class="modal-header">
@@ -107,6 +129,20 @@
         <li>Press Preview to experience the flow and follow screen links.</li>
       </ul>
     </div>
+  </div>
+
+  <div id="screen-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="screen-modal-title">
+    <div class="modal-header">
+      <h2 id="screen-modal-title">Screen settings</h2>
+      <button id="screen-modal-close" class="modal-close" type="button" aria-label="Close dialog">&times;</button>
+    </div>
+    <form id="screen-modal-form" class="modal-content">
+      <div id="screen-modal-body" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="screen-modal-cancel" class="button-secondary" type="button">Cancel</button>
+        <button id="screen-modal-confirm" class="button-primary" type="submit">Confirm</button>
+      </div>
+    </form>
   </div>
 
   <div id="preview-backdrop" class="preview-backdrop hidden" aria-hidden="true">
@@ -139,6 +175,29 @@
           <p id="analysis-panel-empty" class="analysis-panel-empty">
             Interact with the preview to see cursor trails and click hotspots.
           </p>
+          <div id="analysis-summary-cards" class="analysis-summary-cards" hidden>
+            <article class="analysis-summary-card">
+              <div class="analysis-summary-icon" aria-hidden="true">&#128338;</div>
+              <div class="analysis-summary-content">
+                <span class="analysis-summary-value" id="analysis-average-session-time">0s</span>
+                <span class="analysis-summary-label">Average Session Time</span>
+              </div>
+            </article>
+            <article class="analysis-summary-card">
+              <div class="analysis-summary-icon" aria-hidden="true">&#128433;</div>
+              <div class="analysis-summary-content">
+                <span class="analysis-summary-value" id="analysis-total-clicks">0</span>
+                <span class="analysis-summary-label">Total Clicks</span>
+              </div>
+            </article>
+            <article class="analysis-summary-card">
+              <div class="analysis-summary-icon" aria-hidden="true">&#127919;</div>
+              <div class="analysis-summary-content">
+                <span class="analysis-summary-value" id="analysis-hotspot-clicks">0</span>
+                <span class="analysis-summary-label">Hotspot Clicks</span>
+              </div>
+            </article>
+          </div>
           <dl class="analysis-stats">
             <div class="analysis-stat">
               <dt>Cursor points</dt>
@@ -149,6 +208,52 @@
               <dd id="analysis-click-count">0</dd>
             </div>
           </dl>
+          <section id="analysis-session-block" class="analysis-section" hidden>
+            <header class="analysis-section-header">
+              <label class="analysis-section-label" for="analysis-session-screen">Select screen for session analysis</label>
+              <select id="analysis-session-screen"></select>
+            </header>
+            <div class="analysis-table-container">
+              <table class="analysis-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Session #</th>
+                    <th scope="col">Start Time</th>
+                    <th scope="col">Duration</th>
+                    <th scope="col">Total Clicks</th>
+                    <th scope="col">Mouse Moves</th>
+                    <th scope="col">Hotspot Clicks</th>
+                    <th scope="col">Hotspot Hovers</th>
+                    <th scope="col">Unique Hotspots</th>
+                  </tr>
+                </thead>
+                <tbody id="analysis-session-table-body"></tbody>
+              </table>
+              <p id="analysis-session-empty" class="analysis-empty-message" hidden>No sessions recorded yet.</p>
+            </div>
+          </section>
+          <section id="analysis-hotspot-block" class="analysis-section" hidden>
+            <header class="analysis-section-header">
+              <h4 class="analysis-section-title">Hotspot Performance Analysis</h4>
+            </header>
+            <div class="analysis-table-container">
+              <table class="analysis-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Screen</th>
+                    <th scope="col">Hotspot Name</th>
+                    <th scope="col">Clicks</th>
+                    <th scope="col">Hovers</th>
+                    <th scope="col">Total Interactions</th>
+                    <th scope="col">Unique Sessions</th>
+                    <th scope="col">Session Rate</th>
+                  </tr>
+                </thead>
+                <tbody id="analysis-hotspot-table-body"></tbody>
+              </table>
+              <p id="analysis-hotspot-empty" class="analysis-empty-message" hidden>No hotspot interactions yet.</p>
+            </div>
+          </section>
         </aside>
         <div id="preview-canvas-container" class="preview-stage"></div>
       </div>

@@ -10,13 +10,20 @@ const screenDropdown = document.getElementById('screen-select');
 const addScreenBtn = document.getElementById('add-screen');
 const duplicateScreenBtn = document.getElementById('duplicate-screen');
 const deleteScreenBtn = document.getElementById('delete-screen');
-const renameScreenBtn = document.getElementById('rename-screen');
 
 const helpButton = document.getElementById('help-button');
 const previewButton = document.getElementById('preview-button');
 const helpModal = document.getElementById('help-modal');
 const closeHelpBtn = document.getElementById('close-help');
 const modalBackdrop = document.getElementById('modal-backdrop');
+const dialogBackdrop = document.getElementById('dialog-backdrop');
+const screenModal = document.getElementById('screen-modal');
+const screenModalTitle = document.getElementById('screen-modal-title');
+const screenModalForm = document.getElementById('screen-modal-form');
+const screenModalBody = document.getElementById('screen-modal-body');
+const screenModalConfirm = document.getElementById('screen-modal-confirm');
+const screenModalCancel = document.getElementById('screen-modal-cancel');
+const screenModalClose = document.getElementById('screen-modal-close');
 
 const selectionBar = document.getElementById('selection-bar');
 const selectionLabel = document.getElementById('selection-label');
@@ -42,11 +49,28 @@ const analysisMoveCount = document.getElementById('analysis-move-count');
 const analysisClickCount = document.getElementById('analysis-click-count');
 const analysisResetBtn = document.getElementById('analysis-reset');
 const analysisEmptyState = document.getElementById('analysis-panel-empty');
+const analysisSummaryCards = document.getElementById('analysis-summary-cards');
+const analysisAverageSessionTime = document.getElementById('analysis-average-session-time');
+const analysisTotalClicksValue = document.getElementById('analysis-total-clicks');
+const analysisHotspotClicksValue = document.getElementById('analysis-hotspot-clicks');
+const analysisSessionBlock = document.getElementById('analysis-session-block');
+const analysisSessionScreenSelect = document.getElementById('analysis-session-screen');
+const analysisSessionTableBody = document.getElementById('analysis-session-table-body');
+const analysisSessionEmpty = document.getElementById('analysis-session-empty');
+const analysisHotspotBlock = document.getElementById('analysis-hotspot-block');
+const analysisHotspotTableBody = document.getElementById('analysis-hotspot-table-body');
+const analysisHotspotEmpty = document.getElementById('analysis-hotspot-empty');
 
 let selectedElement = null;
 let dragState = null;
 let resizeState = null;
 let lastFocusedBeforeHelp = null;
+let lastFocusedBeforeScreenModal = null;
+let screenModalState = null;
+let inlineScreenRenameInput = null;
+let inlineScreenRenameTargetId = null;
+let inlineScreenRenameKeyHandler = null;
+let inlineScreenRenameBlurHandler = null;
 
 const GRID_SIZE = 16;
 const MIN_WIDTH = 60;
@@ -68,6 +92,21 @@ const ANALYSIS_MAX_MOVE_POINTS = 1200;
 const ANALYSIS_MAX_CLICK_POINTS = 400;
 const ANALYSIS_MOVE_MIN_DISTANCE = 12;
 const ANALYSIS_MOVE_MIN_INTERVAL = 40;
+const HEAT_POINT_RADIUS = 56;
+const HEATMAP_GRADIENT_STOPS = [
+  { stop: 0, r: 56, g: 142, b: 60, a: 0 },
+  { stop: 0.2, r: 76, g: 175, b: 80, a: 0.38 },
+  { stop: 0.45, r: 255, g: 214, b: 0, a: 0.46 },
+  { stop: 0.75, r: 255, g: 160, b: 0, a: 0.58 },
+  { stop: 1, r: 229, g: 57, b: 53, a: 0.7 }
+];
+const HEAT_INTENSITY_EXPONENT = 0.65;
+const hotspotDetails = new Map();
+let hotspotIdCounter = 0;
+const interactionSessions = new Map();
+let interactionSessionCounter = 0;
+let activeInteractionSession = null;
+let pendingAnalyticsRefresh = false;
 
 const screens = new Map();
 let screenCounter = 1;
@@ -339,6 +378,7 @@ function setElementText(element, selector, value, fallback, datasetKey) {
   if (target) {
     target.textContent = resolved;
   }
+  refreshHotspotMetadata(element);
 }
 
 function normaliseOptions(rawValue, fallbackOptions) {
@@ -400,6 +440,7 @@ function updateDropdownVisual(element) {
     row.append(marker, text);
     dropdown.appendChild(row);
   });
+  refreshHotspotMetadata(element);
 }
 
 function updateCardVisual(element) {
@@ -415,6 +456,7 @@ function updateCardVisual(element) {
   if (heading) heading.textContent = title;
   if (body) body.textContent = description;
   if (button) button.textContent = cta;
+  refreshHotspotMetadata(element);
 }
 
 function updateRadioGroupVisual(element) {
@@ -438,6 +480,7 @@ function updateRadioGroupVisual(element) {
     row.append(bullet, text);
     container.appendChild(row);
   });
+  refreshHotspotMetadata(element);
 }
 
 function updateSliderVisual(element) {
@@ -473,10 +516,107 @@ function updateSliderVisual(element) {
   const track = element.querySelector('.wire-slider-track');
   const fill = element.querySelector('.wire-slider-fill');
   const handle = element.querySelector('.wire-slider-handle');
-  if (!track || !handle || !fill) return;
+  if (!track || !handle || !fill) {
+    refreshHotspotMetadata(element);
+    return;
+  }
   const percent = ((value - resolvedMin) / (resolvedMax - resolvedMin)) * 100;
   fill.style.width = `${percent}%`;
   handle.style.left = `${percent}%`;
+  refreshHotspotMetadata(element);
+}
+
+function refreshHotspotMetadata(element) {
+  if (!element || !element.dataset) return;
+  const targetScreenId = element.dataset.targetScreen;
+  const hotspotId = element.dataset.hotspotId;
+  if (!targetScreenId || !screens.has(targetScreenId)) {
+    if (hotspotId) {
+      hotspotDetails.delete(hotspotId);
+      delete element.dataset.hotspotId;
+      delete element.dataset.hotspotLabel;
+      scheduleDetailedAnalyticsRefresh();
+    }
+    return;
+  }
+  const ensuredId = ensureHotspotId(element);
+  const metadata = buildHotspotMetadata(element, ensuredId);
+  const previous = hotspotDetails.get(ensuredId);
+  if (!previous || !isHotspotMetadataEqual(previous, metadata)) {
+    hotspotDetails.set(ensuredId, metadata);
+    element.dataset.hotspotLabel = metadata.name;
+    scheduleDetailedAnalyticsRefresh();
+  }
+}
+
+function ensureHotspotId(element) {
+  if (!element || !element.dataset) return '';
+  const existing = element.dataset.hotspotId;
+  if (existing) {
+    const numeric = Number.parseInt(existing.replace('hotspot-', ''), 10);
+    if (Number.isFinite(numeric)) {
+      hotspotIdCounter = Math.max(hotspotIdCounter, numeric);
+    }
+    return existing;
+  }
+  hotspotIdCounter += 1;
+  const generated = `hotspot-${hotspotIdCounter}`;
+  element.dataset.hotspotId = generated;
+  return generated;
+}
+
+function buildHotspotMetadata(element, hotspotId) {
+  return {
+    id: hotspotId,
+    screenId: getElementScreenId(element),
+    targetScreenId: element.dataset?.targetScreen || '',
+    name: deriveHotspotLabel(element)
+  };
+}
+
+function getElementScreenId(element) {
+  if (!element) return '';
+  const canvas = element.closest('.canvas');
+  return canvas ? canvas.id : '';
+}
+
+function deriveHotspotLabel(element) {
+  if (!element || !element.dataset) return 'Hotspot';
+  const fallback = formatElementLabel(element);
+  const type = element.dataset.type || '';
+  switch (type) {
+    case 'button':
+      return (element.dataset.label || getElementText(element, '.wire-button', 'Button')).trim() || fallback;
+    case 'input':
+      return (element.dataset.placeholder || 'Input field').trim() || fallback;
+    case 'dropdown':
+      return (element.dataset.label || 'Dropdown').trim() || fallback;
+    case 'card':
+      return (element.dataset.title || 'Card hotspot').trim() || fallback;
+    case 'heading':
+      return (element.dataset.text || getElementText(element, '.wire-heading', 'Heading')).trim() || fallback;
+    case 'paragraph':
+      return (element.dataset.text || getElementText(element, '.wire-paragraph', 'Paragraph')).trim() || fallback;
+    case 'text':
+      return (element.dataset.text || getElementText(element, '.wire-text', 'Text')).trim() || fallback;
+    case 'image':
+      return (element.dataset.label || 'Image').trim() || fallback;
+    case 'radio-group':
+      return (element.dataset.label || 'Radio group').trim() || fallback;
+    case 'slider':
+      return (element.dataset.label || 'Slider').trim() || fallback;
+    default:
+      return fallback;
+  }
+}
+
+function isHotspotMetadataEqual(a, b) {
+  if (!a || !b) return false;
+  return a.name === b.name && a.targetScreenId === b.targetScreenId && a.screenId === b.screenId;
+}
+
+function getHotspotMeta(hotspotId) {
+  return hotspotDetails.get(hotspotId) || null;
 }
 
 function getPropertySchemaForElement(element) {
@@ -684,6 +824,7 @@ function init() {
   attachScreenControls();
   attachScreenManager();
   attachHelpModal();
+  attachScreenDialogs();
   attachSelectionControls();
   attachPreviewControls();
   if (typeof ResizeObserver !== 'undefined' && canvasContainer) {
@@ -766,6 +907,14 @@ function attachGlobalEvents() {
   });
 
   document.addEventListener('keydown', (event) => {
+    if (isScreenModalOpen()) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeScreenModal();
+      }
+      return;
+    }
+
     if (isPreviewOpen()) {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -852,32 +1001,434 @@ function attachScreenManager() {
     setActiveScreen(event.target.value);
   });
 
-  addScreenBtn.addEventListener('click', () => {
-    const suggested = `Screen ${screenCounter}`;
-    const nameInput = prompt('Name for the new screen?', suggested);
-    const screenId = createScreen(nameInput && nameInput.trim() ? nameInput.trim() : suggested);
-    setActiveScreen(screenId);
+  screenDropdown.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    startInlineScreenRename();
   });
 
-  if (renameScreenBtn) {
-    renameScreenBtn.addEventListener('click', () => {
-      renameActiveScreen();
-    });
-  }
+  addScreenBtn.addEventListener('click', () => {
+    showAddScreenModal();
+  });
 
   duplicateScreenBtn.addEventListener('click', () => {
-    duplicateActiveScreen();
+    showDuplicateScreenModal();
   });
 
   deleteScreenBtn.addEventListener('click', () => {
-    deleteActiveScreen();
+    showDeleteScreenModal();
   });
+}
+
+function showAddScreenModal() {
+  if (!screens) return;
+  const suggested = `Screen ${screenCounter}`;
+  openScreenModal({
+    type: 'input',
+    title: 'Add screen',
+    message: 'Name the new screen.',
+    defaultValue: suggested,
+    placeholder: 'New screen name',
+    confirmLabel: 'Create screen',
+    onConfirm: (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return false;
+      }
+      const screenId = createScreen(trimmed);
+      setActiveScreen(screenId);
+      closeScreenModal();
+      return true;
+    }
+  });
+}
+
+function showDuplicateScreenModal() {
+  if (!activeScreenId || !screens.has(activeScreenId)) return;
+  const source = screens.get(activeScreenId);
+  const suggested = `${source.name} copy`;
+  openScreenModal({
+    type: 'input',
+    title: 'Duplicate screen',
+    message: `Create a copy of "${source.name}".`,
+    defaultValue: suggested,
+    placeholder: 'Duplicated screen name',
+    confirmLabel: 'Duplicate screen',
+    onConfirm: (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return false;
+      }
+      const newId = duplicateActiveScreen(trimmed);
+      if (newId) {
+        closeScreenModal();
+        return true;
+      }
+      return false;
+    }
+  });
+}
+
+function showDeleteScreenModal() {
+  if (!activeScreenId || !screens.has(activeScreenId)) return;
+
+  if (screens.size === 1) {
+    openScreenModal({
+      type: 'info',
+      title: 'Cannot delete screen',
+      message: 'Keep at least one screen in the project.',
+      confirmLabel: 'Got it',
+      hideCancel: true
+    });
+    return;
+  }
+
+  const targetId = activeScreenId;
+  const screenData = screens.get(targetId);
+  openScreenModal({
+    type: 'confirm',
+    title: 'Delete screen',
+    message: `Delete "${screenData.name}"? This cannot be undone.`,
+    confirmLabel: 'Delete screen',
+    cancelLabel: 'Cancel',
+    destructive: true,
+    onConfirm: () => {
+      const deleted = performDeleteActiveScreen(targetId);
+      if (deleted) {
+        closeScreenModal();
+        return true;
+      }
+      return false;
+    }
+  });
+}
+
+function startInlineScreenRename() {
+  if (!screenDropdown) return;
+  if (inlineScreenRenameInput) {
+    inlineScreenRenameInput.focus({ preventScroll: true });
+    inlineScreenRenameInput.select();
+    return;
+  }
+  if (!activeScreenId || !screens.has(activeScreenId)) return;
+
+  const screenData = screens.get(activeScreenId);
+  inlineScreenRenameTargetId = activeScreenId;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'screen-rename-input';
+  input.value = screenData.name;
+  input.setAttribute('aria-label', 'Rename screen');
+  input.maxLength = 80;
+
+  inlineScreenRenameInput = input;
+  inlineScreenRenameKeyHandler = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      finishInlineScreenRename(true);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      finishInlineScreenRename(false);
+    }
+  };
+  inlineScreenRenameBlurHandler = () => {
+    finishInlineScreenRename(true);
+  };
+
+  input.addEventListener('keydown', inlineScreenRenameKeyHandler);
+  input.addEventListener('blur', inlineScreenRenameBlurHandler);
+
+  screenDropdown.style.display = 'none';
+  screenDropdown.insertAdjacentElement('afterend', input);
+
+  window.requestAnimationFrame(() => {
+    input.focus({ preventScroll: true });
+    input.select();
+  });
+}
+
+function finishInlineScreenRename(applyChanges) {
+  if (!inlineScreenRenameInput) return;
+
+  const input = inlineScreenRenameInput;
+  if (inlineScreenRenameKeyHandler) {
+    input.removeEventListener('keydown', inlineScreenRenameKeyHandler);
+  }
+  if (inlineScreenRenameBlurHandler) {
+    input.removeEventListener('blur', inlineScreenRenameBlurHandler);
+  }
+
+  const newValue = input.value.trim();
+  const targetId = inlineScreenRenameTargetId;
+
+  inlineScreenRenameInput = null;
+  inlineScreenRenameTargetId = null;
+  inlineScreenRenameKeyHandler = null;
+  inlineScreenRenameBlurHandler = null;
+
+  input.remove();
+  screenDropdown.style.display = '';
+
+  if (applyChanges && targetId && screens.has(targetId) && newValue) {
+    if (targetId === activeScreenId) {
+      renameActiveScreen(newValue);
+    } else {
+      updateScreenName(targetId, newValue);
+    }
+  }
+
+  screenDropdown.focus({ preventScroll: true });
+}
+
+function isScreenModalOpen() {
+  return Boolean(screenModalState) && screenModal && !screenModal.classList.contains('hidden');
+}
+
+function openScreenModal(config = {}) {
+  if (!screenModal || !screenModalForm || !dialogBackdrop) return;
+
+  closeScreenModal(false);
+
+  lastFocusedBeforeScreenModal = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
+
+  const type = config.type || 'confirm';
+  screenModalState = {
+    type,
+    requireValue: type === 'input' ? config.requireValue !== false : false,
+    onConfirm: typeof config.onConfirm === 'function' ? config.onConfirm : null,
+    onCancel: typeof config.onCancel === 'function' ? config.onCancel : null,
+    hideCancel: Boolean(config.hideCancel),
+    destructive: Boolean(config.destructive),
+    validate: typeof config.validate === 'function' ? config.validate : null,
+    dismissible: config.dismissible !== false,
+    input: null,
+    inputListener: null
+  };
+
+  screenModalTitle.textContent = config.title || 'Screen settings';
+  screenModalBody.innerHTML = '';
+
+  if (type === 'input' && config.message) {
+    const message = document.createElement('p');
+    message.textContent = config.message;
+    screenModalBody.appendChild(message);
+  } else if (config.message) {
+    const message = document.createElement('p');
+    message.textContent = config.message;
+    screenModalBody.appendChild(message);
+  }
+
+  if (type === 'input') {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'modal-input';
+    input.value = config.defaultValue || '';
+    input.placeholder = config.placeholder || '';
+    input.setAttribute('aria-label', config.ariaLabel || 'Screen name');
+    input.maxLength = typeof config.maxLength === 'number' ? config.maxLength : 80;
+    screenModalBody.appendChild(input);
+    screenModalState.input = input;
+  }
+
+  screenModalConfirm.textContent = config.confirmLabel || 'Confirm';
+  screenModalConfirm.classList.toggle('button-danger', screenModalState.destructive);
+  screenModalConfirm.disabled = false;
+
+  if (screenModalState.hideCancel) {
+    screenModalCancel.style.display = 'none';
+    screenModalCancel.setAttribute('aria-hidden', 'true');
+  } else {
+    screenModalCancel.style.display = '';
+    screenModalCancel.removeAttribute('aria-hidden');
+    screenModalCancel.textContent = config.cancelLabel || 'Cancel';
+  }
+
+  updateScreenModalConfirmState();
+
+  dialogBackdrop.classList.remove('hidden');
+  dialogBackdrop.setAttribute('aria-hidden', 'false');
+  screenModal.classList.remove('hidden');
+  screenModal.setAttribute('aria-hidden', 'false');
+
+  if (screenModalState.input) {
+    const listener = () => updateScreenModalConfirmState();
+    screenModalState.inputListener = listener;
+    screenModalState.input.addEventListener('input', listener);
+    window.requestAnimationFrame(() => {
+      screenModalState?.input?.focus({ preventScroll: true });
+      screenModalState?.input?.select();
+    });
+  } else {
+    window.requestAnimationFrame(() => {
+      screenModalConfirm.focus({ preventScroll: true });
+    });
+  }
+}
+
+function closeScreenModal(restoreFocus = true) {
+  if (screenModalState && screenModalState.input && screenModalState.inputListener) {
+    screenModalState.input.removeEventListener('input', screenModalState.inputListener);
+  }
+
+  screenModalBody.innerHTML = '';
+  screenModalConfirm.classList.remove('button-danger');
+  screenModalConfirm.disabled = false;
+  screenModalCancel.style.display = '';
+  screenModalCancel.removeAttribute('aria-hidden');
+
+  if (!screenModal.classList.contains('hidden')) {
+    screenModal.classList.add('hidden');
+  }
+  screenModal.setAttribute('aria-hidden', 'true');
+
+  if (!dialogBackdrop.classList.contains('hidden')) {
+    dialogBackdrop.classList.add('hidden');
+  }
+  dialogBackdrop.setAttribute('aria-hidden', 'true');
+
+  const focusTarget = restoreFocus ? lastFocusedBeforeScreenModal : null;
+  screenModalState = null;
+  lastFocusedBeforeScreenModal = null;
+
+  if (focusTarget && typeof focusTarget.focus === 'function') {
+    focusTarget.focus({ preventScroll: true });
+  }
+}
+
+function handleScreenModalConfirm() {
+  if (!screenModalState) return;
+
+  const maybeClose = () => {
+    if (screenModalState) {
+      closeScreenModal();
+    }
+  };
+
+  if (screenModalState.input) {
+    updateScreenModalConfirmState();
+    if (screenModalConfirm.disabled) {
+      screenModalState.input.reportValidity();
+      return;
+    }
+
+    screenModalState.input.setCustomValidity('');
+    const value = screenModalState.input.value.trim();
+    try {
+      const result = screenModalState.onConfirm ? screenModalState.onConfirm(value) : true;
+      if (result && typeof result.then === 'function') {
+        screenModalConfirm.disabled = true;
+        result
+          .then((resolved) => {
+            if (resolved !== false) {
+              maybeClose();
+            } else {
+              screenModalConfirm.disabled = false;
+              updateScreenModalConfirmState();
+            }
+          })
+          .catch((error) => {
+            console.error(error);
+            screenModalConfirm.disabled = false;
+            updateScreenModalConfirmState();
+          });
+        return;
+      }
+      if (result === false) {
+        return;
+      }
+      maybeClose();
+    } catch (error) {
+      console.error(error);
+    }
+  } else {
+    try {
+      const result = screenModalState.onConfirm ? screenModalState.onConfirm() : true;
+      if (result && typeof result.then === 'function') {
+        screenModalConfirm.disabled = true;
+        result
+          .then((resolved) => {
+            if (resolved !== false) {
+              maybeClose();
+            } else {
+              screenModalConfirm.disabled = false;
+            }
+          })
+          .catch((error) => {
+            console.error(error);
+            screenModalConfirm.disabled = false;
+          });
+        return;
+      }
+      if (result === false) {
+        return;
+      }
+      maybeClose();
+    } catch (error) {
+      console.error(error);
+    }
+  }
+}
+
+function handleScreenModalCancel() {
+  if (screenModalState && typeof screenModalState.onCancel === 'function') {
+    screenModalState.onCancel();
+  }
+  closeScreenModal();
+}
+
+function updateScreenModalConfirmState() {
+  if (!screenModalState) return;
+  if (screenModalState.input) {
+    const value = screenModalState.input.value.trim();
+    let disabled = screenModalState.requireValue && value.length === 0;
+    let validationMessage = '';
+    if (!disabled && screenModalState.validate) {
+      const validationResult = screenModalState.validate(value);
+      if (validationResult === false) {
+        disabled = true;
+      } else if (typeof validationResult === 'string') {
+        disabled = true;
+        validationMessage = validationResult;
+      }
+    }
+    screenModalState.input.setCustomValidity(validationMessage);
+    screenModalConfirm.disabled = disabled;
+  } else {
+    screenModalConfirm.disabled = false;
+  }
 }
 
 function attachHelpModal() {
   helpButton.addEventListener('click', openHelpModal);
   closeHelpBtn.addEventListener('click', closeHelpModal);
   modalBackdrop.addEventListener('click', closeHelpModal);
+}
+
+function attachScreenDialogs() {
+  if (!screenModalForm || !screenModal || !dialogBackdrop) return;
+
+  screenModalForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    handleScreenModalConfirm();
+  });
+
+  screenModalCancel.addEventListener('click', (event) => {
+    event.preventDefault();
+    handleScreenModalCancel();
+  });
+
+  screenModalClose.addEventListener('click', (event) => {
+    event.preventDefault();
+    handleScreenModalCancel();
+  });
+
+  dialogBackdrop.addEventListener('click', () => {
+    if (!screenModalState) return;
+    if (screenModalState.dismissible === false) return;
+    handleScreenModalCancel();
+  });
 }
 
 function isHelpOpen() {
@@ -958,6 +1509,11 @@ function attachPreviewControls() {
   if (analysisResetBtn) {
     analysisResetBtn.addEventListener('click', resetAnalysisDataForCurrentScreen);
   }
+  if (analysisSessionScreenSelect) {
+    analysisSessionScreenSelect.addEventListener('change', () => {
+      scheduleDetailedAnalyticsRefresh();
+    });
+  }
   if (previewCanvasContainer) {
     if (typeof window !== 'undefined' && 'PointerEvent' in window) {
       previewCanvasContainer.addEventListener('pointermove', handlePreviewPointerMove);
@@ -1020,33 +1576,44 @@ function setActiveScreen(id) {
   updateSizeControls(active.width, active.height, active.presetKey);
   refreshSelectionBar();
   refreshLinkSelectOptions();
+  scheduleDetailedAnalyticsRefresh();
 }
 
-function renameActiveScreen() {
-  if (!activeScreenId || !screens.has(activeScreenId)) return;
-  const screenData = screens.get(activeScreenId);
-  const nameInput = prompt('Rename screen:', screenData.name);
-  if (nameInput === null) return;
-  const trimmed = nameInput.trim();
-  if (!trimmed || trimmed === screenData.name) return;
+function renameActiveScreen(newName) {
+  if (!activeScreenId || !screens.has(activeScreenId)) return false;
+  return updateScreenName(activeScreenId, newName);
+}
+
+function updateScreenName(screenId, proposedName) {
+  if (!screenId || !screens.has(screenId)) return false;
+  const trimmed = typeof proposedName === 'string' ? proposedName.trim() : '';
+  if (!trimmed) return false;
+
+  const screenData = screens.get(screenId);
+  if (screenData.name === trimmed) return false;
 
   screenData.name = trimmed;
   if (screenData.option) {
     screenData.option.textContent = trimmed;
   }
-  refreshSelectionBar();
+  if (screenId === activeScreenId) {
+    refreshSelectionBar();
+  }
   if (isPreviewOpen()) {
     buildPreviewScreens();
   }
   refreshLinkSelectOptions();
+  scheduleDetailedAnalyticsRefresh();
+  return true;
 }
 
-function duplicateActiveScreen() {
-  if (!activeScreenId || !screens.has(activeScreenId)) return;
+function duplicateActiveScreen(requestedName) {
+  if (!activeScreenId || !screens.has(activeScreenId)) return null;
   const source = screens.get(activeScreenId);
-  const suggested = `${source.name} copy`;
-  const nameInput = prompt('Name for the duplicated screen?', suggested);
-  const duplicateName = nameInput && nameInput.trim() ? nameInput.trim() : suggested;
+  const fallbackName = `${source.name} copy`;
+  const duplicateName = typeof requestedName === 'string' && requestedName.trim()
+    ? requestedName.trim()
+    : fallbackName;
 
   const newScreenId = createScreen(duplicateName);
   const target = screens.get(newScreenId);
@@ -1055,24 +1622,22 @@ function duplicateActiveScreen() {
   copyScreenContents(source.canvas, target.canvas);
   setActiveScreen(newScreenId);
   refreshLinkSelectOptions();
+  return newScreenId;
 }
 
-function deleteActiveScreen() {
-  if (!activeScreenId || !screens.has(activeScreenId)) return;
+function performDeleteActiveScreen(screenId = activeScreenId) {
+  if (!screenId || !screens.has(screenId)) return false;
   if (screens.size === 1) {
-    alert('Keep at least one screen in the project.');
-    return;
+    return false;
   }
 
   const options = Array.from(screenDropdown.options);
-  const currentIndex = options.findIndex((option) => option.value === activeScreenId);
+  const currentIndex = options.findIndex((option) => option.value === screenId);
   const candidateAfter = currentIndex >= 0 ? options[currentIndex + 1] : null;
   const candidateBefore = currentIndex > 0 ? options[currentIndex - 1] : null;
   const fallbackId = candidateAfter?.value || candidateBefore?.value || null;
 
-  const screenToRemove = screens.get(activeScreenId);
-  const confirmed = confirm(`Delete "${screenToRemove.name}"? This cannot be undone.`);
-  if (!confirmed) return;
+  const screenToRemove = screens.get(screenId);
 
   clearSelection();
   if (screenToRemove.canvas.parentElement) {
@@ -1081,25 +1646,41 @@ function deleteActiveScreen() {
   if (screenToRemove.option) {
     screenToRemove.option.remove();
   }
-  screens.delete(activeScreenId);
+  screens.delete(screenId);
   previewInteractionData.delete(screenToRemove.id);
+  clearSessionDataForScreen(screenToRemove.id);
+  hotspotDetails.forEach((meta, hotspotId) => {
+    if (meta.screenId === screenToRemove.id) {
+      hotspotDetails.delete(hotspotId);
+    }
+  });
   clearLinksToScreen(screenToRemove.id);
-  refreshSelectionBar();
 
-  const nextId = fallbackId && screens.has(fallbackId)
+  const deletingActive = activeScreenId === screenId;
+  if (deletingActive) {
+    refreshSelectionBar();
+  }
+
+  let nextId = fallbackId && screens.has(fallbackId)
     ? fallbackId
     : screens.size > 0
       ? screens.keys().next().value
       : null;
 
-  activeScreenId = null;
-  if (nextId) {
-    setActiveScreen(nextId);
-  } else {
-    const newScreenId = createScreen(`Screen ${screenCounter}`);
-    setActiveScreen(newScreenId);
+  if (deletingActive) {
+    activeScreenId = null;
+    if (nextId) {
+      setActiveScreen(nextId);
+    } else {
+      const newScreenId = createScreen(`Screen ${screenCounter}`);
+      setActiveScreen(newScreenId);
+      nextId = newScreenId;
+    }
   }
+
   refreshLinkSelectOptions();
+  scheduleDetailedAnalyticsRefresh();
+  return true;
 }
 
 function createCanvasElement(id) {
@@ -1670,9 +2251,18 @@ function applyLinkState(element) {
   const target = element.dataset.targetScreen;
   if (target && screens.has(target)) {
     element.classList.add('has-link');
+    const hotspotId = ensureHotspotId(element);
+    element.dataset.hotspotId = hotspotId;
+    refreshHotspotMetadata(element);
   } else {
     if (target && !screens.has(target)) {
       delete element.dataset.targetScreen;
+    }
+    if (element.dataset.hotspotId) {
+      hotspotDetails.delete(element.dataset.hotspotId);
+      delete element.dataset.hotspotId;
+      delete element.dataset.hotspotLabel;
+      scheduleDetailedAnalyticsRefresh();
     }
     element.classList.remove('has-link');
   }
@@ -1782,11 +2372,15 @@ function setPreviewMode(mode) {
     }
     return;
   }
+  if (previewMode === 'preview' && nextMode === 'analysis') {
+    finaliseActiveInteractionSession();
+  }
   previewMode = nextMode;
   applyPreviewModeUi();
   if (previewMode === 'analysis') {
     scheduleAnalysisRender(previewActiveScreenId);
   }
+  scheduleDetailedAnalyticsRefresh();
 }
 
 function applyPreviewModeUi() {
@@ -1836,6 +2430,7 @@ function updateAnalysisSummary() {
     const shouldShow = previewMode === 'analysis' && isPreviewOpen() && totals.moves === 0 && totals.clicks === 0;
     analysisEmptyState.hidden = !shouldShow;
   }
+  scheduleDetailedAnalyticsRefresh();
 }
 
 function getInteractionState(screenId) {
@@ -1862,6 +2457,7 @@ function resetAnalysisDataForCurrentScreen() {
   if (previewInteractionData.has(previewActiveScreenId)) {
     previewInteractionData.delete(previewActiveScreenId);
   }
+  clearSessionDataForScreen(previewActiveScreenId);
   scheduleAnalysisRender(previewActiveScreenId);
   updateAnalysisSummary();
 }
@@ -1871,23 +2467,26 @@ function handlePreviewPointerMove(event) {
   if (typeof event.pointerType === 'string' && event.pointerType !== 'mouse') return;
   const position = getPreviewEventCoordinates(event);
   if (!position) return;
+  const hotspotInfo = resolvePreviewHotspotInfo(event, position);
   const now = performance.now();
   if (lastPointerSample && lastPointerSample.screenId === position.screenId) {
     const elapsed = now - lastPointerSample.time;
     const distance = Math.hypot(position.x - lastPointerSample.x, position.y - lastPointerSample.y);
-    if (elapsed < ANALYSIS_MOVE_MIN_INTERVAL && distance < ANALYSIS_MOVE_MIN_DISTANCE) {
+    const hotspotChanged = lastPointerSample.hotspotId !== (hotspotInfo && hotspotInfo.id);
+    if (!hotspotChanged && elapsed < ANALYSIS_MOVE_MIN_INTERVAL && distance < ANALYSIS_MOVE_MIN_DISTANCE) {
       return;
     }
   }
-  lastPointerSample = { ...position, time: now };
-  recordPreviewMove(position.screenId, position.x, position.y);
+  lastPointerSample = { ...position, time: now, hotspotId: hotspotInfo ? hotspotInfo.id : null };
+  recordPreviewMove(position.screenId, position.x, position.y, hotspotInfo);
 }
 
 function handlePreviewClick(event) {
   if (!isPreviewOpen() || previewMode !== 'preview') return;
   const position = getPreviewEventCoordinates(event);
   if (!position) return;
-  recordPreviewClick(position.screenId, position.x, position.y);
+  const hotspotInfo = resolvePreviewHotspotInfo(event, position);
+  recordPreviewClick(position.screenId, position.x, position.y, hotspotInfo);
 }
 
 function getPreviewEventCoordinates(event) {
@@ -1905,24 +2504,38 @@ function getPreviewEventCoordinates(event) {
   return { canvas, screenId, x, y };
 }
 
-function recordPreviewMove(screenId, x, y) {
+function recordPreviewMove(screenId, x, y, hotspotInfo) {
   const state = getInteractionState(screenId);
   if (!state) return;
-  state.moves.push({ x, y });
+  const timestamp = Date.now();
+  state.moves.push({
+    x,
+    y,
+    time: timestamp,
+    hotspotId: hotspotInfo ? hotspotInfo.id : null
+  });
   if (state.moves.length > ANALYSIS_MAX_MOVE_POINTS) {
     state.moves.splice(0, state.moves.length - ANALYSIS_MAX_MOVE_POINTS);
   }
+  registerSessionMove(screenId, hotspotInfo, timestamp);
   scheduleAnalysisRender(screenId);
   updateAnalysisSummary();
 }
 
-function recordPreviewClick(screenId, x, y) {
+function recordPreviewClick(screenId, x, y, hotspotInfo) {
   const state = getInteractionState(screenId);
   if (!state) return;
-  state.clicks.push({ x, y });
+  const timestamp = Date.now();
+  state.clicks.push({
+    x,
+    y,
+    time: timestamp,
+    hotspotId: hotspotInfo ? hotspotInfo.id : null
+  });
   if (state.clicks.length > ANALYSIS_MAX_CLICK_POINTS) {
     state.clicks.splice(0, state.clicks.length - ANALYSIS_MAX_CLICK_POINTS);
   }
+  registerSessionClick(screenId, hotspotInfo, timestamp);
   scheduleAnalysisRender(screenId);
   updateAnalysisSummary();
 }
@@ -1948,24 +2561,96 @@ function renderAnalysisForScreen(screenId) {
   ctx.clearRect(0, 0, overlay.width, overlay.height);
   const data = previewInteractionData.get(screenId);
   if (!data) return;
-  data.moves.forEach(({ x, y }) => {
-    drawHeatPoint(ctx, x, y);
-  });
+  if (data.moves.length > 0) {
+    renderHeatmapOverlay(ctx, overlay, data.moves);
+  }
   data.clicks.forEach(({ x, y }) => {
     drawClickMarker(ctx, x, y);
   });
 }
 
-function drawHeatPoint(ctx, x, y) {
-  const radius = 56;
-  const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
-  gradient.addColorStop(0, 'rgba(255, 87, 34, 0.55)');
-  gradient.addColorStop(0.6, 'rgba(255, 87, 34, 0.25)');
-  gradient.addColorStop(1, 'rgba(255, 87, 34, 0)');
+function renderHeatmapOverlay(targetCtx, overlayCanvas, points) {
+  const buffer = getHeatmapBuffer(overlayCanvas);
+  const bufferCtx = buffer.getContext('2d');
+  if (!bufferCtx) return;
+  bufferCtx.clearRect(0, 0, buffer.width, buffer.height);
+  points.forEach(({ x, y }) => {
+    stampHeatIntensity(bufferCtx, x, y);
+  });
+  colouriseHeatmap(bufferCtx, targetCtx);
+}
+
+function getHeatmapBuffer(canvas) {
+  if (!canvas.__heatmapBuffer) {
+    canvas.__heatmapBuffer = document.createElement('canvas');
+  }
+  const buffer = canvas.__heatmapBuffer;
+  if (buffer.width !== canvas.width || buffer.height !== canvas.height) {
+    buffer.width = canvas.width;
+    buffer.height = canvas.height;
+  }
+  return buffer;
+}
+
+function stampHeatIntensity(ctx, x, y) {
+  ctx.save();
+  const gradient = ctx.createRadialGradient(x, y, 0, x, y, HEAT_POINT_RADIUS);
+  gradient.addColorStop(0, 'rgba(0, 0, 0, 0.42)');
+  gradient.addColorStop(0.55, 'rgba(0, 0, 0, 0.18)');
+  gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
   ctx.fillStyle = gradient;
+  ctx.globalCompositeOperation = 'lighter';
   ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.arc(x, y, HEAT_POINT_RADIUS, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
+}
+
+function colouriseHeatmap(sourceCtx, targetCtx) {
+  const { canvas } = sourceCtx;
+  const width = canvas.width;
+  const height = canvas.height;
+  if (width === 0 || height === 0) return;
+  const image = sourceCtx.getImageData(0, 0, width, height);
+  const { data } = image;
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = data[i + 3] / 255;
+    if (alpha <= 0) {
+      data[i + 3] = 0;
+      continue;
+    }
+    const colour = sampleHeatmapColour(Math.min(1, Math.pow(alpha, HEAT_INTENSITY_EXPONENT)));
+    data[i] = colour.r;
+    data[i + 1] = colour.g;
+    data[i + 2] = colour.b;
+    data[i + 3] = Math.round(colour.a * 255);
+  }
+  targetCtx.putImageData(image, 0, 0);
+}
+
+function sampleHeatmapColour(value) {
+  const stops = HEATMAP_GRADIENT_STOPS;
+  if (!stops.length) {
+    return { r: 255, g: 87, b: 34, a: value };
+  }
+  if (value <= stops[0].stop) {
+    return stops[0];
+  }
+  for (let index = 1; index < stops.length; index += 1) {
+    const stop = stops[index];
+    if (value <= stop.stop) {
+      const prev = stops[index - 1];
+      const range = stop.stop - prev.stop || 1;
+      const t = (value - prev.stop) / range;
+      return {
+        r: Math.round(prev.r + (stop.r - prev.r) * t),
+        g: Math.round(prev.g + (stop.g - prev.g) * t),
+        b: Math.round(prev.b + (stop.b - prev.b) * t),
+        a: prev.a + (stop.a - prev.a) * t
+      };
+    }
+  }
+  return stops[stops.length - 1];
 }
 
 function drawClickMarker(ctx, x, y) {
@@ -1980,6 +2665,465 @@ function drawClickMarker(ctx, x, y) {
   ctx.fillStyle = 'rgba(227, 35, 24, 0.55)';
   ctx.fill();
   ctx.restore();
+}
+
+function ensureActiveInteractionSession(timestamp) {
+  const now = Number.isFinite(timestamp) ? timestamp : Date.now();
+  if (!activeInteractionSession) {
+    activeInteractionSession = {
+      id: ++interactionSessionCounter,
+      startTime: now,
+      lastActivity: now,
+      perScreen: new Map()
+    };
+  } else if (now > activeInteractionSession.lastActivity) {
+    activeInteractionSession.lastActivity = now;
+  }
+  return activeInteractionSession;
+}
+
+function ensureSessionStats(session, screenId) {
+  if (!session.perScreen.has(screenId)) {
+    session.perScreen.set(screenId, {
+      moves: 0,
+      clicks: 0,
+      hotspotClicks: 0,
+      hotspotHovers: 0,
+      uniqueHotspots: new Set(),
+      hoverByHotspot: new Map(),
+      clickByHotspot: new Map(),
+      currentHover: null,
+      lastActivity: session.startTime
+    });
+  }
+  return session.perScreen.get(screenId);
+}
+
+function registerSessionMove(screenId, hotspotInfo, timestamp) {
+  if (!screenId) return;
+  const session = ensureActiveInteractionSession(timestamp);
+  const stats = ensureSessionStats(session, screenId);
+  stats.moves += 1;
+  stats.lastActivity = timestamp;
+  const hotspotId = hotspotInfo && hotspotInfo.id;
+  if (hotspotId) {
+    const hoverEntry = stats.hoverByHotspot.get(hotspotId) || { moves: 0, entries: 0 };
+    hoverEntry.moves = (hoverEntry.moves || 0) + 1;
+    hoverEntry.name = hotspotInfo.name || hoverEntry.name || '';
+    hoverEntry.targetScreenId = hotspotInfo.targetScreenId || hoverEntry.targetScreenId || '';
+    if (stats.currentHover !== hotspotId) {
+      hoverEntry.entries = (hoverEntry.entries || 0) + 1;
+      stats.hotspotHovers += 1;
+      stats.currentHover = hotspotId;
+    }
+    stats.hoverByHotspot.set(hotspotId, hoverEntry);
+    stats.uniqueHotspots.add(hotspotId);
+  } else {
+    stats.currentHover = null;
+  }
+  scheduleDetailedAnalyticsRefresh();
+}
+
+function registerSessionClick(screenId, hotspotInfo, timestamp) {
+  if (!screenId) return;
+  const session = ensureActiveInteractionSession(timestamp);
+  const stats = ensureSessionStats(session, screenId);
+  stats.clicks += 1;
+  stats.lastActivity = timestamp;
+  const hotspotId = hotspotInfo && hotspotInfo.id;
+  if (hotspotId) {
+    const clickEntry = stats.clickByHotspot.get(hotspotId) || { clicks: 0 };
+    clickEntry.clicks = (clickEntry.clicks || 0) + 1;
+    clickEntry.name = hotspotInfo.name || clickEntry.name || '';
+    clickEntry.targetScreenId = hotspotInfo.targetScreenId || clickEntry.targetScreenId || '';
+    stats.clickByHotspot.set(hotspotId, clickEntry);
+    stats.hotspotClicks += 1;
+    stats.uniqueHotspots.add(hotspotId);
+  }
+  scheduleDetailedAnalyticsRefresh();
+}
+
+function finaliseActiveInteractionSession() {
+  if (!activeInteractionSession) return;
+  const session = activeInteractionSession;
+  const endTime = Number.isFinite(session.lastActivity) ? session.lastActivity : Date.now();
+  const durationMs = Math.max(0, endTime - session.startTime);
+  session.perScreen.forEach((stats, screenId) => {
+    const hasActivity = stats.moves || stats.clicks || stats.hotspotClicks || stats.hotspotHovers;
+    if (!hasActivity) return;
+    const summary = {
+      sessionId: session.id,
+      startTime: session.startTime,
+      endTime,
+      durationMs,
+      moves: stats.moves,
+      clicks: stats.clicks,
+      hotspotClicks: stats.hotspotClicks,
+      hotspotHovers: stats.hotspotHovers,
+      uniqueHotspotCount: stats.uniqueHotspots.size,
+      hoverDetails: mapEntries(stats.hoverByHotspot, (value = {}) => ({
+        entries: value.entries || 0,
+        moves: value.moves || 0,
+        name: value.name || '',
+        targetScreenId: value.targetScreenId || ''
+      })),
+      clickDetails: mapEntries(stats.clickByHotspot, (value = {}) => ({
+        clicks: value.clicks || 0,
+        name: value.name || '',
+        targetScreenId: value.targetScreenId || ''
+      }))
+    };
+    if (!interactionSessions.has(screenId)) {
+      interactionSessions.set(screenId, []);
+    }
+    interactionSessions.get(screenId).push(summary);
+  });
+  activeInteractionSession = null;
+  scheduleDetailedAnalyticsRefresh();
+}
+
+function clearSessionDataForScreen(screenId) {
+  if (!screenId) return;
+  interactionSessions.delete(screenId);
+  if (activeInteractionSession && activeInteractionSession.perScreen) {
+    activeInteractionSession.perScreen.delete(screenId);
+  }
+  scheduleDetailedAnalyticsRefresh();
+}
+
+function getSessionSummariesForScreen(screenId) {
+  if (!screenId) return [];
+  const stored = interactionSessions.has(screenId) ? interactionSessions.get(screenId).slice() : [];
+  if (activeInteractionSession && activeInteractionSession.perScreen.has(screenId)) {
+    const stats = activeInteractionSession.perScreen.get(screenId);
+    const hasActivity = stats.moves || stats.clicks || stats.hotspotClicks || stats.hotspotHovers;
+    if (hasActivity) {
+      const now = Date.now();
+      stored.push({
+        sessionId: activeInteractionSession.id,
+        startTime: activeInteractionSession.startTime,
+        endTime: now,
+        durationMs: Math.max(0, now - activeInteractionSession.startTime),
+        moves: stats.moves,
+        clicks: stats.clicks,
+        hotspotClicks: stats.hotspotClicks,
+        hotspotHovers: stats.hotspotHovers,
+        uniqueHotspotCount: stats.uniqueHotspots.size,
+        hoverDetails: mapEntries(stats.hoverByHotspot, (value = {}) => ({
+          entries: value.entries || 0,
+          moves: value.moves || 0,
+          name: value.name || '',
+          targetScreenId: value.targetScreenId || ''
+        })),
+        clickDetails: mapEntries(stats.clickByHotspot, (value = {}) => ({
+          clicks: value.clicks || 0,
+          name: value.name || '',
+          targetScreenId: value.targetScreenId || ''
+        })),
+        inProgress: true
+      });
+    }
+  }
+  return stored;
+}
+
+function collectAvailableAnalyticsScreens() {
+  const ids = new Set();
+  if (previewActiveScreenId && screens.has(previewActiveScreenId)) {
+    ids.add(previewActiveScreenId);
+  }
+  interactionSessions.forEach((sessionList, screenId) => {
+    if (sessionList && sessionList.length && screens.has(screenId)) {
+      ids.add(screenId);
+    }
+  });
+  if (activeInteractionSession) {
+    activeInteractionSession.perScreen.forEach((stats, screenId) => {
+      if (!screens.has(screenId)) return;
+      if (stats && (stats.moves || stats.clicks || stats.hotspotClicks || stats.hotspotHovers)) {
+        ids.add(screenId);
+      }
+    });
+  }
+  return Array.from(ids);
+}
+
+function buildSessionSelectOptions(screenIds, selectedId) {
+  if (!analysisSessionScreenSelect) return;
+  analysisSessionScreenSelect.innerHTML = '';
+  screenIds.forEach((id) => {
+    if (!screens.has(id)) return;
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = screens.get(id).name;
+    analysisSessionScreenSelect.appendChild(option);
+  });
+  if (screenIds.length === 0) {
+    analysisSessionScreenSelect.disabled = true;
+    return;
+  }
+  analysisSessionScreenSelect.disabled = false;
+  if (selectedId && screenIds.includes(selectedId)) {
+    analysisSessionScreenSelect.value = selectedId;
+  } else {
+    analysisSessionScreenSelect.value = screenIds[0];
+  }
+}
+
+function updateSummaryCards(screenId, sessions) {
+  if (!analysisSummaryCards || !analysisAverageSessionTime || !analysisTotalClicksValue || !analysisHotspotClicksValue) {
+    return;
+  }
+  if (!screenId || !sessions.length) {
+    analysisSummaryCards.hidden = true;
+    analysisAverageSessionTime.textContent = '0s';
+    analysisTotalClicksValue.textContent = '0';
+    analysisHotspotClicksValue.textContent = '0';
+    return;
+  }
+  const totalDuration = sessions.reduce((total, session) => total + session.durationMs, 0);
+  const avgDuration = totalDuration / sessions.length;
+  const totalClicks = sessions.reduce((total, session) => total + session.clicks, 0);
+  const totalHotspotClicks = sessions.reduce((total, session) => total + session.hotspotClicks, 0);
+  analysisSummaryCards.hidden = false;
+  analysisAverageSessionTime.textContent = formatDuration(avgDuration);
+  analysisTotalClicksValue.textContent = String(totalClicks);
+  analysisHotspotClicksValue.textContent = String(totalHotspotClicks);
+}
+
+function renderSessionTable(screenId, sessions) {
+  if (!analysisSessionBlock || !analysisSessionTableBody || !analysisSessionEmpty) return;
+  if (!screenId) {
+    analysisSessionBlock.hidden = true;
+    return;
+  }
+  analysisSessionBlock.hidden = false;
+  analysisSessionTableBody.innerHTML = '';
+  if (!sessions.length) {
+    analysisSessionEmpty.hidden = false;
+    return;
+  }
+  analysisSessionEmpty.hidden = true;
+  const sorted = sessions.slice().sort((a, b) => b.startTime - a.startTime);
+  sorted.forEach((session, index) => {
+    const row = document.createElement('tr');
+    if (session.inProgress) {
+      row.dataset.live = 'true';
+    }
+    const sessionLabel = session.inProgress ? 'Live' : String(sorted.length - index);
+    const sessionCell = createTableCell(sessionLabel, 'th');
+    sessionCell.scope = 'row';
+    row.appendChild(sessionCell);
+    row.appendChild(createTableCell(formatClockTime(session.startTime)));
+    row.appendChild(createTableCell(formatDuration(session.durationMs)));
+    row.appendChild(createTableCell(String(session.clicks)));
+    row.appendChild(createTableCell(String(session.moves)));
+    row.appendChild(createTableCell(String(session.hotspotClicks)));
+    row.appendChild(createTableCell(String(session.hotspotHovers)));
+    row.appendChild(createTableCell(String(session.uniqueHotspotCount)));
+    analysisSessionTableBody.appendChild(row);
+  });
+}
+
+function renderHotspotTable(screenId, sessions) {
+  if (!analysisHotspotBlock || !analysisHotspotTableBody || !analysisHotspotEmpty) return;
+  if (!screenId) {
+    analysisHotspotBlock.hidden = true;
+    return;
+  }
+  analysisHotspotBlock.hidden = false;
+  analysisHotspotTableBody.innerHTML = '';
+  if (!sessions.length) {
+    analysisHotspotEmpty.hidden = false;
+    return;
+  }
+  const totalSessions = sessions.length;
+  const aggregates = new Map();
+  sessions.forEach((session) => {
+    const visited = new Set();
+    session.hoverDetails.forEach((detail) => {
+      if (!detail.hotspotId) return;
+      const record = ensureHotspotAggregate(aggregates, detail.hotspotId, detail.name, detail.targetScreenId);
+      record.hovers += detail.entries || 0;
+      record.hoverSamples += detail.moves || 0;
+      visited.add(detail.hotspotId);
+    });
+    session.clickDetails.forEach((detail) => {
+      if (!detail.hotspotId) return;
+      const record = ensureHotspotAggregate(aggregates, detail.hotspotId, detail.name, detail.targetScreenId);
+      record.clicks += detail.clicks || 0;
+      visited.add(detail.hotspotId);
+    });
+    visited.forEach((hotspotId) => {
+      const record = ensureHotspotAggregate(aggregates, hotspotId);
+      record.uniqueSessions += 1;
+    });
+  });
+  const entries = Array.from(aggregates.entries());
+  if (!entries.length) {
+    analysisHotspotEmpty.hidden = false;
+    return;
+  }
+  analysisHotspotEmpty.hidden = true;
+  entries.sort(([, a], [, b]) => (b.clicks + b.hovers) - (a.clicks + a.hovers));
+  const screenName = screens.has(screenId) ? screens.get(screenId).name : screenId;
+  entries.forEach(([hotspotId, stats]) => {
+    const meta = getHotspotMeta(hotspotId);
+    const row = document.createElement('tr');
+    row.appendChild(createTableCell(screenName));
+    const hotspotName = meta?.name || stats.name || 'Hotspot';
+    row.appendChild(createTableCell(hotspotName));
+    row.appendChild(createTableCell(String(stats.clicks)));
+    row.appendChild(createTableCell(String(stats.hovers)));
+    const totalCell = createTableCell(String(stats.clicks + stats.hovers));
+    totalCell.dataset.hotspotTotal = 'true';
+    row.appendChild(totalCell);
+    row.appendChild(createTableCell(String(stats.uniqueSessions)));
+    const sessionRate = totalSessions > 0 ? Math.round((stats.uniqueSessions / totalSessions) * 100) : 0;
+    const rateCell = createTableCell(`${sessionRate}%`);
+    rateCell.className = 'analysis-hotspot-rate';
+    row.appendChild(rateCell);
+    analysisHotspotTableBody.appendChild(row);
+  });
+}
+
+function ensureHotspotAggregate(map, hotspotId, name, targetScreenId) {
+  if (!map.has(hotspotId)) {
+    map.set(hotspotId, {
+      clicks: 0,
+      hovers: 0,
+      hoverSamples: 0,
+      uniqueSessions: 0,
+      name: name || '',
+      targetScreenId: targetScreenId || ''
+    });
+  }
+  const record = map.get(hotspotId);
+  if (name && !record.name) {
+    record.name = name;
+  }
+  if (targetScreenId && !record.targetScreenId) {
+    record.targetScreenId = targetScreenId;
+  }
+  return record;
+}
+
+function createTableCell(text, type = 'td') {
+  const cell = document.createElement(type);
+  cell.textContent = text;
+  return cell;
+}
+
+function formatDuration(durationMs) {
+  const totalSeconds = Math.max(0, Math.round(Number(durationMs || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes >= 1) {
+    return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }
+  return `${seconds}s`;
+}
+
+function formatClockTime(timestamp) {
+  if (!Number.isFinite(timestamp)) return '--';
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+function mapEntries(map, mapper) {
+  const result = [];
+  if (!map) return result;
+  map.forEach((value, key) => {
+    const transformed = mapper ? mapper(value, key) : {};
+    result.push({ hotspotId: key, ...transformed });
+  });
+  return result;
+}
+
+function scheduleDetailedAnalyticsRefresh() {
+  if (pendingAnalyticsRefresh) return;
+  pendingAnalyticsRefresh = true;
+  const run = () => {
+    pendingAnalyticsRefresh = false;
+    updateDetailedAnalyticsPanels();
+  };
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(run, { timeout: 400 });
+  } else if (typeof window !== 'undefined') {
+    window.requestAnimationFrame(run);
+  } else {
+    run();
+  }
+}
+
+function updateDetailedAnalyticsPanels() {
+  const screenIds = collectAvailableAnalyticsScreens();
+  const selected = analysisSessionScreenSelect && analysisSessionScreenSelect.value;
+  const resolvedScreenId = selected && screenIds.includes(selected)
+    ? selected
+    : (screenIds.includes(previewActiveScreenId) ? previewActiveScreenId : (screenIds[0] || ''));
+  if (analysisSessionScreenSelect) {
+    buildSessionSelectOptions(screenIds, resolvedScreenId);
+  }
+  const sessions = resolvedScreenId ? getSessionSummariesForScreen(resolvedScreenId) : [];
+  updateSummaryCards(resolvedScreenId, sessions);
+  renderSessionTable(resolvedScreenId, sessions);
+  renderHotspotTable(resolvedScreenId, sessions);
+}
+
+function findWireItemForPreview(previewItem, screenId) {
+  if (!previewItem || !screenId || !screens.has(screenId)) return null;
+  const screen = screens.get(screenId);
+  const hotspotId = previewItem.dataset.hotspotId;
+  if (hotspotId) {
+    const selector = `.wire-item[data-hotspot-id="${hotspotId}"]`;
+    return screen.canvas.querySelector(selector);
+  }
+  const targetScreen = previewItem.dataset.targetScreen;
+  if (!targetScreen) return null;
+  const candidates = Array.from(
+    screen.canvas.querySelectorAll(`.wire-item[data-target-screen="${targetScreen}"]`)
+  );
+  if (!candidates.length) {
+    return null;
+  }
+  const expectedName = previewItem.dataset.hotspotName;
+  if (expectedName) {
+    const matched = candidates.find((item) => {
+      const label = item.dataset.hotspotLabel || deriveHotspotLabel(item);
+      return label === expectedName;
+    });
+    if (matched) return matched;
+  }
+  return candidates[0];
+}
+
+function resolvePreviewHotspotInfo(event, position) {
+  if (!event || !position) return null;
+  const hotspotElement = event.target?.closest?.('.preview-item[data-target-screen]');
+  if (!hotspotElement) return null;
+  let hotspotId = hotspotElement.dataset.hotspotId || '';
+  let hotspotName = hotspotElement.dataset.hotspotName || '';
+  let targetScreenId = hotspotElement.dataset.targetScreen || '';
+  const sourceScreenId = hotspotElement.dataset.sourceScreenId || position.screenId || '';
+  if (!hotspotId && sourceScreenId) {
+    const wireItem = findWireItemForPreview(hotspotElement, sourceScreenId);
+    if (wireItem) {
+      hotspotId = ensureHotspotId(wireItem);
+      refreshHotspotMetadata(wireItem);
+      hotspotElement.dataset.hotspotId = hotspotId;
+      hotspotElement.dataset.hotspotName = wireItem.dataset.hotspotLabel || deriveHotspotLabel(wireItem);
+      hotspotName = hotspotElement.dataset.hotspotName;
+      targetScreenId = wireItem.dataset.targetScreen || targetScreenId;
+    }
+  }
+  const metadata = hotspotId ? getHotspotMeta(hotspotId) : null;
+  return {
+    id: hotspotId || metadata?.id || null,
+    name: hotspotName || metadata?.name || 'Hotspot',
+    targetScreenId: targetScreenId || metadata?.targetScreenId || '',
+    sourceScreenId
+  };
 }
 
 function openPreview(mode = 'preview') {
@@ -2021,10 +3165,12 @@ function openPreview(mode = 'preview') {
       scheduleAnalysisRender(previewActiveScreenId);
     }
   });
+  scheduleDetailedAnalyticsRefresh();
 }
 
 function closePreview() {
   if (!isPreviewOpen()) return;
+  finaliseActiveInteractionSession();
   updatePreviewFullscreenUi(false);
   previewBackdrop.classList.add('hidden');
   if (previewCanvasContainer) {
@@ -2041,6 +3187,7 @@ function closePreview() {
   if (focusTarget && typeof focusTarget.focus === 'function') {
     focusTarget.focus({ preventScroll: true });
   }
+  scheduleDetailedAnalyticsRefresh();
 }
 
 function buildPreviewScreens() {
@@ -2091,6 +3238,7 @@ function activatePreviewScreen(screenId) {
   scheduleAnalysisRender(screenId);
   updateAnalysisSummary();
   updateAnalysisOverlayVisibility();
+  scheduleDetailedAnalyticsRefresh();
 }
 
 function createPreviewCanvas(screenData) {
@@ -2119,6 +3267,14 @@ function createPreviewCanvas(screenData) {
 
     if (item.dataset.targetScreen && screens.has(item.dataset.targetScreen)) {
       previewItem.dataset.targetScreen = item.dataset.targetScreen;
+    }
+    previewItem.dataset.sourceScreenId = screenData.id;
+    if (item.dataset.hotspotId) {
+      previewItem.dataset.hotspotId = item.dataset.hotspotId;
+      const hotspotLabel = item.dataset.hotspotLabel || deriveHotspotLabel(item);
+      if (hotspotLabel) {
+        previewItem.dataset.hotspotName = hotspotLabel;
+      }
     }
 
     const interactive = buildPreviewElement(item);
