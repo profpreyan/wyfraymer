@@ -120,13 +120,14 @@ function getOrCreateSheet(spreadsheetId, sheetName) {
 }
 
 function buildCorsResponse(payload) {
-  const output = ContentService
+  return ContentService
     .createTextOutput(JSON.stringify(payload || {}))
-    .setMimeType(ContentService.MimeType.JSON);
-  output.setHeader('Access-Control-Allow-Origin', '*');
-  output.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  output.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-  return output;
+    .setMimeType(ContentService.MimeType.JSON)
+    .setHeaders({
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Methods': 'POST, GET, OPTIONS'
+    });
 }
 ```
 

@@ -1642,33 +1642,26 @@ async function syncProjectToSheets() {
   };
   try {
     sheetSyncInFlight = true;
-    if (sheetsSyncButton) {
-      sheetsSyncButton.disabled = true;
-    }
+    if (sheetsSyncButton) sheetsSyncButton.disabled = true;
     setSyncStatus('pending', 'Saving...', { persist: true });
-    const response = await fetch(sheetSyncSettings.endpoint, {
+    // send to your serverless proxy, not Apps Script directly
+    const response = await fetch('/api/sheets-proxy', {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    if (!response.ok) {
-      throw new Error(`Sync failed: HTTP ${response.status}`);
-    }
-    const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      await response.json().catch(() => null);
-    } else {
-      await response.text().catch(() => null);
-    }
+    if (!response.ok) throw new Error(`Sync failed: HTTP ${response.status}`);
+    // consume body defensively
+    const ct = response.headers.get('content-type') || '';
+    if (ct.includes('application/json')) { try { await response.json(); } catch (_) {} }
+    else { try { await response.text(); } catch (_) {} }
     setSyncStatus('success', 'Saved to Sheets', { timeout: 3200 });
   } catch (error) {
     console.error('Sheets sync failed', error);
     setSyncStatus('error', 'Sheets sync failed', { timeout: 4200 });
   } finally {
     sheetSyncInFlight = false;
-    if (sheetsSyncButton) {
-      sheetsSyncButton.disabled = false;
-    }
+    if (sheetsSyncButton) sheetsSyncButton.disabled = false;
   }
 }
 
@@ -1696,26 +1689,26 @@ function buildSheetsRequestUrl(query = {}) {
 }
 
 async function fetchSheetsPayload(url) {
-  const response = await fetch(url, {
+  // Take whatever was built (Apps Script URL), extract its query,
+  // and call your proxy with that query to avoid CORS.
+  let proxyUrl = '/api/sheets-proxy';
+  try {
+    const u = new URL(url, window.location.href);
+    const qs = u.searchParams.toString();
+    if (qs) proxyUrl += `?${qs}`;
+  } catch (_) {
+    // If URL parsing fails, fall back to plain proxy
+  }
+  const response = await fetch(proxyUrl, {
     method: 'GET',
     headers: { Accept: 'application/json, text/plain, */*' }
   });
-  if (!response.ok) {
-    throw new Error(`Sheets request failed: HTTP ${response.status}`);
-  }
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return response.json();
-  }
+  if (!response.ok) throw new Error(`Sheets request failed: HTTP ${response.status}`);
+  const ct = response.headers.get('content-type') || '';
+  if (ct.includes('application/json')) return response.json();
   const text = await response.text();
-  if (!text) {
-    return {};
-  }
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new Error('Sheets response was not valid JSON');
-  }
+  if (!text) return {};
+  try { return JSON.parse(text); } catch { throw new Error('Sheets response was not valid JSON'); }
 }
 
 function normaliseSheetsImportPayload(payload) {
