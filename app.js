@@ -20,6 +20,7 @@ const helpButton = document.getElementById('help-button');
 const previewButton = document.getElementById('preview-button');
 const syncStatusEl = document.getElementById('sync-status');
 const sheetsSyncButton = document.getElementById('sheets-sync-button');
+const sheetsLoadButton = document.getElementById('sheets-load-button');
 const sheetsSettingsButton = document.getElementById('sheets-settings-button');
 const helpModal = document.getElementById('help-modal');
 const closeHelpBtn = document.getElementById('close-help');
@@ -145,6 +146,7 @@ let projectMutationObserver = null;
 let syncStatusTimeout = null;
 let lastFocusedBeforeSheetsModal = null;
 let sheetSyncInFlight = false;
+let sheetFetchInFlight = false;
 
 let sheetSyncSettings = {
   endpoint: '',
@@ -1588,6 +1590,11 @@ function attachSheetsIntegration() {
       openSheetsModal();
     });
   }
+  if (sheetsLoadButton) {
+    sheetsLoadButton.addEventListener('click', () => {
+      importProjectsFromSheets();
+    });
+  }
   if (sheetsSyncButton) {
     sheetsSyncButton.addEventListener('click', () => {
       syncProjectToSheets();
@@ -1618,7 +1625,10 @@ async function syncProjectToSheets() {
     setSyncStatus('error', 'Add Sheets endpoint first', { timeout: 3200 });
     return;
   }
-  if (sheetSyncInFlight) return;
+  if (sheetSyncInFlight || sheetFetchInFlight) {
+    setSyncStatus('pending', 'Sheets sync in progress', { timeout: 2800 });
+    return;
+  }
   const snapshot = persistActiveProjectState();
   if (!snapshot) return;
   const payload = {
@@ -1632,6 +1642,9 @@ async function syncProjectToSheets() {
   };
   try {
     sheetSyncInFlight = true;
+    if (sheetsSyncButton) {
+      sheetsSyncButton.disabled = true;
+    }
     setSyncStatus('pending', 'Saving...', { persist: true });
     const response = await fetch(sheetSyncSettings.endpoint, {
       method: 'POST',
@@ -1653,6 +1666,197 @@ async function syncProjectToSheets() {
     setSyncStatus('error', 'Sheets sync failed', { timeout: 4200 });
   } finally {
     sheetSyncInFlight = false;
+    if (sheetsSyncButton) {
+      sheetsSyncButton.disabled = false;
+    }
+  }
+}
+
+function buildSheetsRequestUrl(query = {}) {
+  if (!sheetSyncSettings.endpoint) return null;
+  try {
+    const url = new URL(sheetSyncSettings.endpoint, window.location.href);
+    if (sheetSyncSettings.spreadsheetId) {
+      url.searchParams.set('spreadsheetId', sheetSyncSettings.spreadsheetId);
+    }
+    if (sheetSyncSettings.sheetName) {
+      url.searchParams.set('sheetName', sheetSyncSettings.sheetName);
+    }
+    Object.entries(query).forEach(([key, value]) => {
+      if (value === undefined || value === null) return;
+      const stringValue = typeof value === 'string' ? value.trim() : String(value);
+      if (!stringValue) return;
+      url.searchParams.set(key, stringValue);
+    });
+    return url.toString();
+  } catch (error) {
+    console.warn('Invalid Sheets endpoint URL', error);
+    return null;
+  }
+}
+
+async function fetchSheetsPayload(url) {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json, text/plain, */*' }
+  });
+  if (!response.ok) {
+    throw new Error(`Sheets request failed: HTTP ${response.status}`);
+  }
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return response.json();
+  }
+  const text = await response.text();
+  if (!text) {
+    return {};
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error('Sheets response was not valid JSON');
+  }
+}
+
+function normaliseSheetsImportPayload(payload) {
+  const records = [];
+  if (!payload || typeof payload !== 'object') {
+    return records;
+  }
+  const collect = (entry, index) => {
+    if (!entry || typeof entry !== 'object') return;
+    const snapshotSource = entry.snapshot || entry.project;
+    if (!snapshotSource || typeof snapshotSource !== 'object') return;
+    const projectId = typeof entry.projectId === 'string' ? entry.projectId.trim() : '';
+    const projectName = typeof entry.projectName === 'string' ? entry.projectName.trim() : '';
+    records.push({
+      id: projectId || null,
+      name: projectName || (projectId ? `Project ${projectId}` : `Imported project ${index + 1}`),
+      snapshot: normaliseProjectSnapshot(snapshotSource),
+      exportedAt: typeof entry.exportedAt === 'string' ? entry.exportedAt : null
+    });
+  };
+
+  if (Array.isArray(payload.items)) {
+    payload.items.forEach(collect);
+  }
+  if (!records.length && payload.project) {
+    collect(payload, 0);
+  }
+  return records;
+}
+
+function mergeSheetsImportEntries(entries) {
+  if (!Array.isArray(entries) || !entries.length) {
+    return { created: 0, updated: 0, activated: false };
+  }
+  let created = 0;
+  let updated = 0;
+  let activated = false;
+  const createdIds = [];
+  entries.forEach((entry, index) => {
+    const resolvedId =
+      typeof entry.id === 'string' && entry.id.trim() ? entry.id.trim() : generateId('project');
+    const name =
+      typeof entry.name === 'string' && entry.name.trim()
+        ? entry.name.trim()
+        : `Imported project ${index + 1}`;
+    const record = {
+      id: resolvedId,
+      name,
+      snapshot: entry.snapshot
+    };
+    if (projects.has(resolvedId)) {
+      const existing = projects.get(resolvedId);
+      existing.name = record.name;
+      existing.snapshot = record.snapshot;
+      projects.set(resolvedId, existing);
+      ensureProjectOption(existing);
+      updated += 1;
+      if (resolvedId === activeProjectId) {
+        activeProjectName = existing.name;
+        restoreProjectSnapshot(existing.snapshot);
+        setProjectSelectValue(existing.id);
+        activated = true;
+      }
+    } else {
+      projects.set(resolvedId, record);
+      ensureProjectOption(record);
+      createdIds.push(resolvedId);
+      created += 1;
+    }
+  });
+
+  if (!activated && createdIds.length) {
+    const targetId = createdIds[0];
+    if (projects.has(targetId)) {
+      activateProject(targetId);
+      activated = true;
+    }
+  } else if (!activated && activeProjectId && projects.has(activeProjectId)) {
+    setProjectSelectValue(activeProjectId);
+  }
+
+  if (created) {
+    projectCounter = Math.max(projectCounter, projects.size + 1);
+  }
+
+  storeProjectsToLocalStorage({ skipPersist: true });
+
+  return { created, updated, activated };
+}
+
+async function importProjectsFromSheets() {
+  if (!sheetSyncSettings.endpoint) {
+    openSheetsModal();
+    setSyncStatus('error', 'Add Sheets endpoint first', { timeout: 3200 });
+    return;
+  }
+  if (sheetSyncInFlight || sheetFetchInFlight) {
+    setSyncStatus('pending', 'Sheets sync in progress', { timeout: 2800 });
+    return;
+  }
+
+  const url = buildSheetsRequestUrl({
+    mode: 'projects',
+    projectId: activeProjectId || undefined
+  });
+  if (!url) {
+    setSyncStatus('error', 'Invalid Sheets endpoint URL', { timeout: 3600 });
+    return;
+  }
+
+  sheetFetchInFlight = true;
+  if (sheetsLoadButton) {
+    sheetsLoadButton.disabled = true;
+  }
+
+  try {
+    setSyncStatus('pending', 'Loading from Sheets...', { persist: true });
+    const payload = await fetchSheetsPayload(url);
+    const entries = normaliseSheetsImportPayload(payload);
+    if (!entries.length) {
+      setSyncStatus('error', 'No projects found in Sheets', { timeout: 3600 });
+      return;
+    }
+    const summary = mergeSheetsImportEntries(entries);
+    const parts = [];
+    if (summary.created) {
+      parts.push(`${summary.created} created`);
+    }
+    if (summary.updated) {
+      parts.push(`${summary.updated} updated`);
+    }
+    const message = parts.length ? `Loaded from Sheets (${parts.join(', ')})` : 'Loaded from Sheets';
+    setSyncStatus('success', message, { timeout: 3600 });
+  } catch (error) {
+    console.error('Sheets import failed', error);
+    setSyncStatus('error', 'Sheets load failed', { timeout: 4500 });
+  } finally {
+    sheetFetchInFlight = false;
+    if (sheetsLoadButton) {
+      sheetsLoadButton.disabled = false;
+    }
   }
 }
 
