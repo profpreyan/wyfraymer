@@ -9,6 +9,29 @@
 <body>
   <header class="top-bar">
     <div class="brand">Wyframer</div>
+    <div class="project-controls">
+      <label for="project-select">Project:</label>
+      <select id="project-select" aria-label="Select project"></select>
+      <button id="add-project" class="icon-button" type="button" title="Add project" aria-label="Add project">
+        <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <path d="M9 4a1 1 0 1 1 2 0v5h5a1 1 0 1 1 0 2h-5v5a1 1 0 1 1-2 0v-5H4a1 1 0 1 1 0-2h5z" />
+        </svg>
+        <span class="visually-hidden">Add project</span>
+      </button>
+      <button id="rename-project" class="icon-button" type="button" title="Rename project" aria-label="Rename project">
+        <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <path d="M4 13.5V16h2.5l7.37-7.37-2.5-2.5zm11.71-6.8a1 1 0 0 0 0-1.41l-1.99-2a1 1 0 0 0-1.41 0l-1.47 1.47 3.4 3.4z" />
+        </svg>
+        <span class="visually-hidden">Rename project</span>
+      </button>
+      <button id="delete-project" class="icon-button" type="button" title="Delete project" aria-label="Delete project">
+        <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <path d="M7.22 6.47a.75.75 0 0 1 1.06 0L10 8.19l1.72-1.72a.75.75 0 0 1 1.06 1.06L11.06 9.25l1.72 1.72a.75.75 0 1 1-1.06 1.06L10 10.31l-1.72 1.72a.75.75 0 1 1-1.06-1.06l1.72-1.72-1.72-1.72a.75.75 0 0 1 0-1.06z" />
+          <path d="M15 4h-3.5l-.44-.88A1 1 0 0 0 10.17 3H7a1 1 0 0 0-.9.56L5.7 5H4a1 1 0 1 0 0 2h11a1 1 0 1 0 0-2zM6 8h8v7a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8z" />
+        </svg>
+        <span class="visually-hidden">Delete project</span>
+      </button>
+    </div>
     <div class="top-bar-controls">
       <div class="screen-controls">
         <label for="screen-size">Screen size:</label>
@@ -54,8 +77,16 @@
       </div>
     </div>
     <div class="header-actions">
+      <div id="sync-status" class="sync-status" role="status" aria-live="polite"></div>
       <button id="preview-button" class="preview-button" type="button" aria-pressed="false">Preview</button>
       <button id="analysis-button" class="analysis-button" type="button" aria-pressed="false">Analysis</button>
+      <button id="sheets-sync-button" class="secondary-button" type="button">Save to Sheets</button>
+      <button id="sheets-settings-button" class="icon-button" type="button" title="Configure Google Sheets connection" aria-label="Configure Google Sheets connection">
+        <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <path d="M11.94 2.34a1 1 0 0 0-1.88 0l-.5 1.53a6.94 6.94 0 0 0-1.9 1.1l-1.56-.64a1 1 0 0 0-1.28.52L3.1 7.42a1 1 0 0 0 .28 1.17l1.26.99a6.9 6.9 0 0 0 0 2.1l-1.26.99a1 1 0 0 0-.28 1.17l.72 1.57a1 1 0 0 0 1.28.52l1.56-.64a6.94 6.94 0 0 0 1.9 1.1l.5 1.53a1 1 0 0 0 1.88 0l.5-1.53a6.94 6.94 0 0 0 1.9-1.1l1.56.64a1 1 0 0 0 1.28-.52l.72-1.57a1 1 0 0 0-.28-1.17l-1.26-.99a6.9 6.9 0 0 0 0-2.1l1.26-.99a1 1 0 0 0 .28-1.17l-.72-1.57a1 1 0 0 0-1.28-.52l-1.56.64a6.94 6.94 0 0 0-1.9-1.1zM10 13.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" />
+        </svg>
+        <span class="visually-hidden">Google Sheets settings</span>
+      </button>
       <button id="help-button" class="help-button icon-button" type="button" title="Help &amp; Tips" aria-label="Help &amp; Tips">
         <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
           <path d="M10 2a8 8 0 1 1 0 16A8 8 0 0 1 10 2zm0 2a6 6 0 1 0 0 12A6 6 0 0 0 10 4zm0 8a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm.12-7c1.4 0 2.38.84 2.38 2.03 0 .89-.44 1.48-1.4 2.07-.76.44-1.04.8-1.04 1.3V11h-1.5v-.72c0-1.02.54-1.66 1.39-2.16.74-.44.97-.74.97-1.16 0-.48-.38-.8-.95-.8-.58 0-.98.34-1.09.9l-1.46-.32C7.7 5.27 8.68 4 10.12 4z" />
@@ -141,6 +172,41 @@
       <div class="modal-actions">
         <button id="screen-modal-cancel" class="button-secondary" type="button">Cancel</button>
         <button id="screen-modal-confirm" class="button-primary" type="submit">Confirm</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="sheets-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="sheets-modal-title">
+    <div class="modal-header">
+      <h2 id="sheets-modal-title">Google Sheets connection</h2>
+      <button id="sheets-modal-close" class="modal-close" type="button" aria-label="Close Google Sheets settings">&times;</button>
+    </div>
+    <form id="sheets-modal-form" class="modal-content">
+      <div class="modal-body">
+        <p>Use a deployed Google Apps Script web app to connect Wyframer with Sheets and Drive.</p>
+        <label for="sheets-endpoint" class="modal-field">
+          <span>Apps Script web app URL</span>
+          <input id="sheets-endpoint" type="url" name="endpoint" placeholder="https://script.google.com/..." required />
+        </label>
+        <label for="sheets-spreadsheet" class="modal-field">
+          <span>Spreadsheet ID</span>
+          <input id="sheets-spreadsheet" type="text" name="spreadsheetId" placeholder="1AbCdefGh..." />
+        </label>
+        <label for="sheets-tab" class="modal-field">
+          <span>Worksheet (tab) name</span>
+          <input id="sheets-tab" type="text" name="sheetName" placeholder="WyframerProjects" />
+        </label>
+        <label for="sheets-drive-folder" class="modal-field">
+          <span>Drive folder ID (optional)</span>
+          <input id="sheets-drive-folder" type="text" name="driveFolderId" placeholder="Folder ID for JSON exports" />
+        </label>
+        <p class="modal-helper-text">
+          The web app should accept JSON POST requests matching the Wyframer project export payload.
+        </p>
+      </div>
+      <div class="modal-actions">
+        <button id="sheets-modal-cancel" class="button-secondary" type="button">Cancel</button>
+        <button id="sheets-modal-save" class="button-primary" type="submit">Save connection</button>
       </div>
     </form>
   </div>

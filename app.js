@@ -6,6 +6,11 @@ const customWidthInput = document.getElementById('custom-width');
 const customHeightInput = document.getElementById('custom-height');
 const applyCustomBtn = document.getElementById('apply-custom');
 
+const projectSelect = document.getElementById('project-select');
+const addProjectBtn = document.getElementById('add-project');
+const renameProjectBtn = document.getElementById('rename-project');
+const deleteProjectBtn = document.getElementById('delete-project');
+
 const screenDropdown = document.getElementById('screen-select');
 const addScreenBtn = document.getElementById('add-screen');
 const duplicateScreenBtn = document.getElementById('duplicate-screen');
@@ -13,6 +18,9 @@ const deleteScreenBtn = document.getElementById('delete-screen');
 
 const helpButton = document.getElementById('help-button');
 const previewButton = document.getElementById('preview-button');
+const syncStatusEl = document.getElementById('sync-status');
+const sheetsSyncButton = document.getElementById('sheets-sync-button');
+const sheetsSettingsButton = document.getElementById('sheets-settings-button');
 const helpModal = document.getElementById('help-modal');
 const closeHelpBtn = document.getElementById('close-help');
 const modalBackdrop = document.getElementById('modal-backdrop');
@@ -24,6 +32,14 @@ const screenModalBody = document.getElementById('screen-modal-body');
 const screenModalConfirm = document.getElementById('screen-modal-confirm');
 const screenModalCancel = document.getElementById('screen-modal-cancel');
 const screenModalClose = document.getElementById('screen-modal-close');
+const sheetsModal = document.getElementById('sheets-modal');
+const sheetsModalForm = document.getElementById('sheets-modal-form');
+const sheetsModalClose = document.getElementById('sheets-modal-close');
+const sheetsModalCancel = document.getElementById('sheets-modal-cancel');
+const sheetsEndpointInput = document.getElementById('sheets-endpoint');
+const sheetsSpreadsheetInput = document.getElementById('sheets-spreadsheet');
+const sheetsSheetNameInput = document.getElementById('sheets-tab');
+const sheetsDriveFolderInput = document.getElementById('sheets-drive-folder');
 
 const selectionBar = document.getElementById('selection-bar');
 const selectionLabel = document.getElementById('selection-label');
@@ -84,7 +100,7 @@ let previewActiveScreenId = null;
 let previousBodyOverflow = '';
 let previewLayoutObserver = null;
 let previewMode = 'preview';
-const previewInteractionData = new Map();
+let previewInteractionData = new Map();
 let lastPointerSample = null;
 const analysisRenderQueue = new Set();
 let analysisRenderScheduled = false;
@@ -101,16 +117,41 @@ const HEATMAP_GRADIENT_STOPS = [
   { stop: 1, r: 229, g: 57, b: 53, a: 0.7 }
 ];
 const HEAT_INTENSITY_EXPONENT = 0.65;
-const hotspotDetails = new Map();
+let hotspotDetails = new Map();
 let hotspotIdCounter = 0;
-const interactionSessions = new Map();
+let interactionSessions = new Map();
 let interactionSessionCounter = 0;
 let activeInteractionSession = null;
 let pendingAnalyticsRefresh = false;
 
-const screens = new Map();
+let screens = new Map();
 let screenCounter = 1;
 let activeScreenId = null;
+
+const PROJECT_STORAGE_KEY = 'wyframer.projects.v1';
+const PROJECT_SCHEMA_VERSION = 1;
+const PROJECT_AUTOSAVE_DELAY = 1200;
+const SHEETS_SETTINGS_STORAGE_KEY = 'wyframer.sheets.settings.v1';
+
+const projects = new Map();
+let activeProjectName = '';
+let activeProjectId = null;
+let projectCounter = 1;
+let projectInitialized = false;
+let projectDirty = false;
+let projectAutosaveHandle = null;
+let projectObserverSuspendCount = 0;
+let projectMutationObserver = null;
+let syncStatusTimeout = null;
+let lastFocusedBeforeSheetsModal = null;
+let sheetSyncInFlight = false;
+
+let sheetSyncSettings = {
+  endpoint: '',
+  spreadsheetId: '',
+  sheetName: '',
+  driveFolderId: ''
+};
 
 const SIZE_PRESETS = {
   '375x667': { width: 375, height: 667 },
@@ -827,6 +868,10 @@ function init() {
   attachScreenDialogs();
   attachSelectionControls();
   attachPreviewControls();
+  attachProjectControls();
+  attachSheetsIntegration();
+  loadSheetsSettings();
+  setupProjectAutosaveObserver();
   if (typeof ResizeObserver !== 'undefined' && canvasContainer) {
     layoutObserver = new ResizeObserver(() => {
       if (activeScreenId && screens.has(activeScreenId)) {
@@ -851,9 +896,764 @@ function init() {
   });
 
   renderPropertiesForElement(null);
+  initialiseProjects();
+  window.addEventListener('beforeunload', handleBeforeUnload);
+}
 
-  const firstScreenId = createScreen('Screen 1');
-  setActiveScreen(firstScreenId);
+function deepClone(value) {
+  if (typeof structuredClone === 'function') {
+    try {
+      return structuredClone(value);
+    } catch (error) {
+      // Fall back to JSON cloning
+    }
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (error) {
+    return value;
+  }
+}
+
+function generateId(prefix) {
+  const random = Math.random().toString(16).slice(2, 10);
+  return `${prefix}-${Date.now()}-${random}`;
+}
+
+function withAutosaveSuspended(run) {
+  projectObserverSuspendCount += 1;
+  try {
+    return run();
+  } finally {
+    projectObserverSuspendCount = Math.max(0, projectObserverSuspendCount - 1);
+  }
+}
+
+function markProjectDirty() {
+  if (!projectInitialized || !activeProjectId) return;
+  if (projectObserverSuspendCount > 0) return;
+  if (projectAutosaveHandle && typeof clearTimeout === 'function') {
+    clearTimeout(projectAutosaveHandle);
+  }
+  projectDirty = true;
+  if (typeof setTimeout === 'function') {
+    projectAutosaveHandle = setTimeout(() => {
+      projectAutosaveHandle = null;
+      persistActiveProjectState();
+    }, PROJECT_AUTOSAVE_DELAY);
+  }
+}
+
+function setupProjectAutosaveObserver() {
+  if (!canvasContainer || typeof MutationObserver === 'undefined') return;
+  projectMutationObserver = new MutationObserver(() => {
+    if (projectObserverSuspendCount > 0) return;
+    markProjectDirty();
+  });
+  projectMutationObserver.observe(canvasContainer, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    characterData: true
+  });
+}
+
+function loadProjectsFromStorage() {
+  if (typeof localStorage === 'undefined') {
+    return { items: [], activeId: null, counter: 1 };
+  }
+  try {
+    const raw = localStorage.getItem(PROJECT_STORAGE_KEY);
+    if (!raw) {
+      return { items: [], activeId: null, counter: 1 };
+    }
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed?.items) ? parsed.items : [];
+    const activeId = typeof parsed?.activeId === 'string' ? parsed.activeId : null;
+    const counter = Number.parseInt(parsed?.counter, 10);
+    return {
+      items,
+      activeId,
+      counter: Number.isFinite(counter) && counter > 0 ? counter : items.length + 1
+    };
+  } catch (error) {
+    console.warn('Failed to load projects from storage', error);
+    return { items: [], activeId: null, counter: 1 };
+  }
+}
+
+function storeProjectsToLocalStorage(options = {}) {
+  if (typeof localStorage === 'undefined') return;
+  if (!options.skipPersist) {
+    persistActiveProjectState({ store: false });
+  }
+  const payload = {
+    counter: projectCounter,
+    activeId: activeProjectId,
+    items: Array.from(projects.values()).map((project) => ({
+      id: project.id,
+      name: project.name,
+      snapshot: project.snapshot
+    }))
+  };
+  try {
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    console.warn('Failed to persist projects', error);
+  }
+}
+
+function createEmptyProjectSnapshot() {
+  return {
+    version: PROJECT_SCHEMA_VERSION,
+    screens: [],
+    screenCounter: 1,
+    activeScreenId: null,
+    analytics: normaliseAnalyticsSnapshot(null),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function normaliseScreenSnapshot(screenSnapshot) {
+  const fallbackPreset = '1280x720';
+  const defaults = SIZE_PRESETS[fallbackPreset];
+  if (!screenSnapshot || typeof screenSnapshot !== 'object') {
+    return {
+      id: generateId('screen'),
+      name: 'Screen',
+      width: defaults.width,
+      height: defaults.height,
+      presetKey: fallbackPreset,
+      html: ''
+    };
+  }
+  const presetKey = typeof screenSnapshot.presetKey === 'string' && SIZE_PRESETS[screenSnapshot.presetKey]
+    ? screenSnapshot.presetKey
+    : 'custom';
+  const width = Number.parseFloat(screenSnapshot.width);
+  const height = Number.parseFloat(screenSnapshot.height);
+  return {
+    id: typeof screenSnapshot.id === 'string' && screenSnapshot.id ? screenSnapshot.id : generateId('screen'),
+    name: typeof screenSnapshot.name === 'string' && screenSnapshot.name.trim()
+      ? screenSnapshot.name.trim()
+      : 'Screen',
+    width: Number.isFinite(width) ? width : defaults.width,
+    height: Number.isFinite(height) ? height : defaults.height,
+    presetKey,
+    html: typeof screenSnapshot.html === 'string' ? screenSnapshot.html : ''
+  };
+}
+
+function normaliseAnalyticsSnapshot(analytics) {
+  if (!analytics || typeof analytics !== 'object') {
+    return {
+      previewInteractionData: [],
+      hotspots: [],
+      interactionSessions: [],
+      hotspotIdCounter: 0,
+      interactionSessionCounter: 0
+    };
+  }
+  const previewEntries = Array.isArray(analytics.previewInteractionData)
+    ? analytics.previewInteractionData
+        .filter((entry) => entry && typeof entry.screenId === 'string')
+        .map((entry) => ({
+          screenId: entry.screenId,
+          moves: Array.isArray(entry.moves) ? entry.moves : [],
+          clicks: Array.isArray(entry.clicks) ? entry.clicks : []
+        }))
+    : [];
+  const hotspotEntries = Array.isArray(analytics.hotspots)
+    ? analytics.hotspots.filter((entry) => entry && entry.id).map((entry) => ({ ...entry }))
+    : [];
+  const sessionEntries = Array.isArray(analytics.interactionSessions)
+    ? analytics.interactionSessions
+        .filter((entry) => entry && entry.screenId)
+        .map((entry) => ({
+          screenId: entry.screenId,
+          sessions: Array.isArray(entry.sessions) ? entry.sessions : []
+        }))
+    : [];
+  return {
+    previewInteractionData: previewEntries,
+    hotspots: hotspotEntries,
+    interactionSessions: sessionEntries,
+    hotspotIdCounter: Number.isFinite(analytics.hotspotIdCounter) ? analytics.hotspotIdCounter : 0,
+    interactionSessionCounter: Number.isFinite(analytics.interactionSessionCounter)
+      ? analytics.interactionSessionCounter
+      : 0
+  };
+}
+
+function normaliseProjectSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return createEmptyProjectSnapshot();
+  }
+  const screensList = Array.isArray(snapshot.screens)
+    ? snapshot.screens.map((screen) => normaliseScreenSnapshot(screen))
+    : [];
+  const activeId = typeof snapshot.activeScreenId === 'string' ? snapshot.activeScreenId : null;
+  const counter = Number.isFinite(snapshot.screenCounter) ? snapshot.screenCounter : screensList.length + 1;
+  return {
+    version: snapshot.version || PROJECT_SCHEMA_VERSION,
+    screens: screensList,
+    activeScreenId: activeId,
+    screenCounter: counter,
+    analytics: normaliseAnalyticsSnapshot(snapshot.analytics),
+    updatedAt: snapshot.updatedAt || new Date().toISOString()
+  };
+}
+
+function ensureProjectOption(project) {
+  if (!projectSelect || !project) return;
+  let option = projectSelect.querySelector(`option[value="${project.id}"]`);
+  if (!option) {
+    option = document.createElement('option');
+    option.value = project.id;
+    projectSelect.appendChild(option);
+  }
+  option.textContent = project.name;
+}
+
+function removeProjectOption(projectId) {
+  if (!projectSelect) return;
+  const option = projectSelect.querySelector(`option[value="${projectId}"]`);
+  if (option) {
+    option.remove();
+  }
+}
+
+function setProjectSelectValue(projectId) {
+  if (!projectSelect) return;
+  projectSelect.value = projectId || '';
+}
+
+function createProject(name, snapshot = null, options = {}) {
+  const projectId = generateId('project');
+  const projectName = typeof name === 'string' && name.trim() ? name.trim() : `Project ${projectCounter}`;
+  const projectSnapshot = snapshot ? normaliseProjectSnapshot(snapshot) : createEmptyProjectSnapshot();
+  const record = {
+    id: projectId,
+    name: projectName,
+    snapshot: projectSnapshot
+  };
+  projects.set(projectId, record);
+  projectCounter += 1;
+  ensureProjectOption(record);
+  if (!options.skipStore) {
+    storeProjectsToLocalStorage();
+  }
+  return projectId;
+}
+
+function getNextProjectId(currentId) {
+  if (!projectSelect) return null;
+  const options = Array.from(projectSelect.options);
+  if (!options.length) return null;
+  const index = options.findIndex((option) => option.value === currentId);
+  if (index === -1) {
+    return options[0]?.value || null;
+  }
+  if (options[index + 1]) {
+    return options[index + 1].value;
+  }
+  if (options[index - 1]) {
+    return options[index - 1].value;
+  }
+  return null;
+}
+
+function clearRuntimeScreens() {
+  clearSelection();
+  if (canvasContainer) {
+    canvasContainer.innerHTML = '';
+  }
+  if (screenDropdown) {
+    screenDropdown.innerHTML = '';
+  }
+  screens = new Map();
+  previewInteractionData = new Map();
+  hotspotDetails = new Map();
+  interactionSessions = new Map();
+  hotspotIdCounter = 0;
+  interactionSessionCounter = 0;
+  activeInteractionSession = null;
+  previewActiveScreenId = null;
+}
+
+function restoreScreenFromSnapshot(screenSnapshot) {
+  const data = normaliseScreenSnapshot(screenSnapshot);
+  const canvasEl = createCanvasElement(data.id);
+  canvasEl.style.display = 'none';
+  canvasContainer.appendChild(canvasEl);
+
+  const width = Number.isFinite(data.width) ? data.width : SIZE_PRESETS['1280x720'].width;
+  const height = Number.isFinite(data.height) ? data.height : SIZE_PRESETS['1280x720'].height;
+  canvasEl.style.width = `${width}px`;
+  canvasEl.style.height = `${height}px`;
+  canvasEl.innerHTML = data.html || '';
+
+  const option = document.createElement('option');
+  option.value = data.id;
+  option.textContent = data.name;
+  screenDropdown.appendChild(option);
+
+  screens.set(data.id, {
+    id: data.id,
+    name: data.name,
+    canvas: canvasEl,
+    width,
+    height,
+    presetKey: data.presetKey,
+    option
+  });
+
+  Array.from(canvasEl.querySelectorAll('.wire-item')).forEach((item) => {
+    configureWireItem(item);
+  });
+
+  return data.id;
+}
+
+function restoreAnalyticsSnapshot(snapshot) {
+  const data = normaliseAnalyticsSnapshot(snapshot);
+  previewInteractionData = new Map();
+  data.previewInteractionData.forEach((entry) => {
+    previewInteractionData.set(entry.screenId, {
+      moves: Array.isArray(entry.moves) ? deepClone(entry.moves) : [],
+      clicks: Array.isArray(entry.clicks) ? deepClone(entry.clicks) : []
+    });
+  });
+
+  hotspotDetails = new Map();
+  hotspotIdCounter = 0;
+  data.hotspots.forEach((meta) => {
+    hotspotDetails.set(meta.id, { ...meta });
+    const numeric = Number.parseInt(String(meta.id).replace('hotspot-', ''), 10);
+    if (Number.isFinite(numeric)) {
+      hotspotIdCounter = Math.max(hotspotIdCounter, numeric);
+    }
+  });
+
+  interactionSessions = new Map();
+  data.interactionSessions.forEach((entry) => {
+    interactionSessions.set(entry.screenId, Array.isArray(entry.sessions) ? deepClone(entry.sessions) : []);
+  });
+  hotspotIdCounter = Number.isFinite(data.hotspotIdCounter) ? data.hotspotIdCounter : hotspotIdCounter;
+  interactionSessionCounter = Number.isFinite(data.interactionSessionCounter)
+    ? data.interactionSessionCounter
+    : interactionSessionCounter;
+  activeInteractionSession = null;
+  pendingAnalyticsRefresh = false;
+  scheduleDetailedAnalyticsRefresh();
+  updateAnalysisSummary();
+}
+
+function exportAnalyticsSnapshot() {
+  const previewEntries = [];
+  previewInteractionData.forEach((value, screenId) => {
+    previewEntries.push({
+      screenId,
+      moves: Array.isArray(value.moves) ? deepClone(value.moves) : [],
+      clicks: Array.isArray(value.clicks) ? deepClone(value.clicks) : []
+    });
+  });
+  const hotspotEntries = deepClone(Array.from(hotspotDetails.values()));
+  const sessionEntries = [];
+  interactionSessions.forEach((sessions, screenId) => {
+    sessionEntries.push({
+      screenId,
+      sessions: Array.isArray(sessions) ? deepClone(sessions) : []
+    });
+  });
+  return {
+    previewInteractionData: previewEntries,
+    hotspots: hotspotEntries,
+    interactionSessions: sessionEntries,
+    hotspotIdCounter,
+    interactionSessionCounter
+  };
+}
+
+function exportRuntimeProjectSnapshot() {
+  const snapshot = {
+    version: PROJECT_SCHEMA_VERSION,
+    screens: [],
+    screenCounter,
+    activeScreenId,
+    analytics: exportAnalyticsSnapshot(),
+    updatedAt: new Date().toISOString()
+  };
+  screens.forEach((screen) => {
+    snapshot.screens.push({
+      id: screen.id,
+      name: screen.name,
+      width: screen.width,
+      height: screen.height,
+      presetKey: screen.presetKey,
+      html: screen.canvas ? screen.canvas.innerHTML : ''
+    });
+  });
+  return snapshot;
+}
+
+function persistActiveProjectState(options = {}) {
+  if (!activeProjectId || !projects.has(activeProjectId)) return null;
+  const snapshot = exportRuntimeProjectSnapshot();
+  const record = projects.get(activeProjectId);
+  record.snapshot = snapshot;
+  projects.set(activeProjectId, record);
+  projectDirty = false;
+  if (options.store !== false) {
+    storeProjectsToLocalStorage({ skipPersist: true });
+  }
+  return snapshot;
+}
+
+function restoreProjectSnapshot(snapshot) {
+  const normalised = normaliseProjectSnapshot(snapshot);
+  let createdDefault = false;
+  withAutosaveSuspended(() => {
+    clearRuntimeScreens();
+    if (!normalised.screens.length) {
+      const defaultId = createScreen('Screen 1');
+      setActiveScreen(defaultId);
+      screenCounter = 2;
+      createdDefault = true;
+    } else {
+      const seenIds = new Set();
+      normalised.screens.forEach((screenData) => {
+        const id = restoreScreenFromSnapshot(screenData);
+        seenIds.add(id);
+      });
+      const targetId = normalised.activeScreenId && seenIds.has(normalised.activeScreenId)
+        ? normalised.activeScreenId
+        : normalised.screens[0].id;
+      setActiveScreen(targetId);
+      screenCounter = Math.max(
+        normalised.screenCounter || normalised.screens.length + 1,
+        normalised.screens.length + 1
+      );
+    }
+    restoreAnalyticsSnapshot(normalised.analytics);
+  });
+  buildPreviewScreens();
+  if (createdDefault) {
+    markProjectDirty();
+  }
+}
+
+function activateProject(projectId) {
+  if (!projectId || !projects.has(projectId)) return;
+  if (projectId === activeProjectId) return;
+  if (activeProjectId && projects.has(activeProjectId)) {
+    persistActiveProjectState();
+  }
+  const nextProject = projects.get(projectId);
+  activeProjectId = projectId;
+  activeProjectName = nextProject.name;
+  restoreProjectSnapshot(nextProject.snapshot);
+  ensureProjectOption(nextProject);
+  setProjectSelectValue(projectId);
+  projectDirty = false;
+  storeProjectsToLocalStorage({ skipPersist: true });
+}
+
+function initialiseProjects() {
+  const stored = loadProjectsFromStorage();
+  projectCounter = Number.isFinite(stored.counter) && stored.counter > 0 ? stored.counter : 1;
+  if (stored.items.length) {
+    stored.items.forEach((item) => {
+      if (!item || typeof item !== 'object') return;
+      const id = typeof item.id === 'string' && item.id ? item.id : generateId('project');
+      const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : `Project ${projectCounter}`;
+      const snapshot = normaliseProjectSnapshot(item.snapshot);
+      projects.set(id, { id, name, snapshot });
+      ensureProjectOption({ id, name });
+    });
+    const initialId = stored.activeId && projects.has(stored.activeId)
+      ? stored.activeId
+      : projects.keys().next().value;
+    projectInitialized = true;
+    activateProject(initialId);
+  } else {
+    const newId = createProject(`Project ${projectCounter}`, null, { skipStore: true });
+    projectInitialized = true;
+    activateProject(newId);
+  }
+  storeProjectsToLocalStorage({ skipPersist: true });
+}
+
+function handleBeforeUnload() {
+  persistActiveProjectState();
+}
+
+function attachProjectControls() {
+  if (projectSelect) {
+    projectSelect.addEventListener('change', (event) => {
+      const projectId = event.target.value;
+      if (!projectId || projectId === activeProjectId) return;
+      if (projects.has(projectId)) {
+        activateProject(projectId);
+      }
+    });
+  }
+
+  if (addProjectBtn) {
+    addProjectBtn.addEventListener('click', () => {
+      const suggestion = `Project ${projectCounter}`;
+      const input = window.prompt('Name the new project:', suggestion);
+      if (input === null) return;
+      const trimmed = input.trim();
+      const name = trimmed || suggestion;
+      const newId = createProject(name);
+      activateProject(newId);
+      setSyncStatus('success', 'Project created', { timeout: 2500 });
+    });
+  }
+
+  if (renameProjectBtn) {
+    renameProjectBtn.addEventListener('click', () => {
+      if (!activeProjectId || !projects.has(activeProjectId)) return;
+      const project = projects.get(activeProjectId);
+      const input = window.prompt('Rename project:', project.name);
+      if (input === null) return;
+      const trimmed = input.trim();
+      if (!trimmed || trimmed === project.name) {
+        return;
+      }
+      project.name = trimmed;
+      activeProjectName = trimmed;
+      ensureProjectOption(project);
+      setProjectSelectValue(project.id);
+      storeProjectsToLocalStorage();
+      setSyncStatus('success', 'Project renamed', { timeout: 2500 });
+    });
+  }
+
+  if (deleteProjectBtn) {
+    deleteProjectBtn.addEventListener('click', () => {
+      if (!activeProjectId || !projects.has(activeProjectId)) return;
+      if (projects.size <= 1) {
+        setSyncStatus('error', 'Keep at least one project', { timeout: 3200 });
+        return;
+      }
+      const project = projects.get(activeProjectId);
+      const confirmed = window.confirm(`Delete project "${project.name}"? This cannot be undone.`);
+      if (!confirmed) return;
+      const nextId = getNextProjectId(activeProjectId);
+      projects.delete(activeProjectId);
+      removeProjectOption(activeProjectId);
+      activeProjectId = null;
+      projectDirty = false;
+      if (nextId && projects.has(nextId)) {
+        activateProject(nextId);
+      } else if (projects.size) {
+        activateProject(projects.keys().next().value);
+      } else {
+        const fallbackId = createProject(`Project ${projectCounter}`);
+        activateProject(fallbackId);
+      }
+      storeProjectsToLocalStorage();
+      setSyncStatus('success', 'Project deleted', { timeout: 2500 });
+    });
+  }
+}
+
+function loadSheetsSettings() {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(SHEETS_SETTINGS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        sheetSyncSettings = {
+          endpoint: typeof parsed?.endpoint === 'string' ? parsed.endpoint : '',
+          spreadsheetId: typeof parsed?.spreadsheetId === 'string' ? parsed.spreadsheetId : '',
+          sheetName: typeof parsed?.sheetName === 'string' ? parsed.sheetName : '',
+          driveFolderId: typeof parsed?.driveFolderId === 'string' ? parsed.driveFolderId : ''
+        };
+      }
+    } catch (error) {
+      console.warn('Failed to load Google Sheets settings', error);
+    }
+  }
+  if (sheetSyncSettings.endpoint) {
+    setSyncStatus('idle', 'Sheets connected', { persist: true });
+  } else {
+    setSyncStatus('idle', 'Sheets not configured', { persist: true });
+  }
+}
+
+function storeSheetsSettings() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(SHEETS_SETTINGS_STORAGE_KEY, JSON.stringify(sheetSyncSettings));
+  } catch (error) {
+    console.warn('Failed to save Google Sheets settings', error);
+  }
+}
+
+function setSyncStatus(state, message, options = {}) {
+  if (!syncStatusEl) return;
+  syncStatusEl.textContent = message || '';
+  syncStatusEl.classList.remove('success', 'error', 'pending');
+  if (state === 'success' || state === 'error' || state === 'pending') {
+    syncStatusEl.classList.add(state);
+  }
+  if (syncStatusTimeout && typeof clearTimeout === 'function') {
+    clearTimeout(syncStatusTimeout);
+    syncStatusTimeout = null;
+  }
+  if (!options.persist) {
+    const duration = Number.isFinite(options.timeout) ? options.timeout : 0;
+    if (duration > 0 && typeof setTimeout === 'function') {
+      syncStatusTimeout = setTimeout(() => {
+        syncStatusTimeout = null;
+        if (sheetSyncSettings.endpoint) {
+          syncStatusEl.textContent = 'Sheets connected';
+        } else {
+          syncStatusEl.textContent = 'Sheets not configured';
+        }
+        syncStatusEl.classList.remove('success', 'error', 'pending');
+      }, duration);
+    }
+  }
+}
+
+function openSheetsModal() {
+  if (!sheetsModal || !dialogBackdrop) return;
+  if (isScreenModalOpen()) {
+    closeScreenModal(false);
+  }
+  lastFocusedBeforeSheetsModal = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  if (sheetsEndpointInput) {
+    sheetsEndpointInput.value = sheetSyncSettings.endpoint || '';
+  }
+  if (sheetsSpreadsheetInput) {
+    sheetsSpreadsheetInput.value = sheetSyncSettings.spreadsheetId || '';
+  }
+  if (sheetsSheetNameInput) {
+    sheetsSheetNameInput.value = sheetSyncSettings.sheetName || '';
+  }
+  if (sheetsDriveFolderInput) {
+    sheetsDriveFolderInput.value = sheetSyncSettings.driveFolderId || '';
+  }
+  dialogBackdrop.classList.remove('hidden');
+  dialogBackdrop.setAttribute('aria-hidden', 'false');
+  sheetsModal.classList.remove('hidden');
+  sheetsModal.setAttribute('aria-hidden', 'false');
+  if (sheetsEndpointInput) {
+    sheetsEndpointInput.focus({ preventScroll: true });
+  }
+}
+
+function closeSheetsModal() {
+  if (!sheetsModal || !dialogBackdrop) return;
+  sheetsModal.classList.add('hidden');
+  sheetsModal.setAttribute('aria-hidden', 'true');
+  if (!isScreenModalOpen()) {
+    dialogBackdrop.classList.add('hidden');
+    dialogBackdrop.setAttribute('aria-hidden', 'true');
+  }
+  if (lastFocusedBeforeSheetsModal && typeof lastFocusedBeforeSheetsModal.focus === 'function') {
+    lastFocusedBeforeSheetsModal.focus({ preventScroll: true });
+  }
+  lastFocusedBeforeSheetsModal = null;
+}
+
+function isSheetsModalOpen() {
+  return sheetsModal && !sheetsModal.classList.contains('hidden');
+}
+
+function handleSheetsModalSubmit(event) {
+  event.preventDefault();
+  sheetSyncSettings = {
+    endpoint: sheetsEndpointInput ? sheetsEndpointInput.value.trim() : '',
+    spreadsheetId: sheetsSpreadsheetInput ? sheetsSpreadsheetInput.value.trim() : '',
+    sheetName: sheetsSheetNameInput ? sheetsSheetNameInput.value.trim() : '',
+    driveFolderId: sheetsDriveFolderInput ? sheetsDriveFolderInput.value.trim() : ''
+  };
+  storeSheetsSettings();
+  if (sheetSyncSettings.endpoint) {
+    setSyncStatus('success', 'Sheets connection saved', { timeout: 3000 });
+  } else {
+    setSyncStatus('idle', 'Sheets not configured', { persist: true });
+  }
+  closeSheetsModal();
+}
+
+function attachSheetsIntegration() {
+  if (sheetsSettingsButton) {
+    sheetsSettingsButton.addEventListener('click', () => {
+      openSheetsModal();
+    });
+  }
+  if (sheetsSyncButton) {
+    sheetsSyncButton.addEventListener('click', () => {
+      syncProjectToSheets();
+    });
+  }
+  if (sheetsModalClose) {
+    sheetsModalClose.addEventListener('click', () => {
+      closeSheetsModal();
+    });
+  }
+  if (sheetsModalCancel) {
+    sheetsModalCancel.addEventListener('click', () => {
+      closeSheetsModal();
+    });
+  }
+  if (sheetsModalForm) {
+    sheetsModalForm.addEventListener('submit', handleSheetsModalSubmit);
+  }
+}
+
+async function syncProjectToSheets() {
+  if (!activeProjectId || !projects.has(activeProjectId)) {
+    setSyncStatus('error', 'No active project', { timeout: 2500 });
+    return;
+  }
+  if (!sheetSyncSettings.endpoint) {
+    openSheetsModal();
+    setSyncStatus('error', 'Add Sheets endpoint first', { timeout: 3200 });
+    return;
+  }
+  if (sheetSyncInFlight) return;
+  const snapshot = persistActiveProjectState();
+  if (!snapshot) return;
+  const payload = {
+    projectId: activeProjectId,
+    projectName: activeProjectName,
+    exportedAt: new Date().toISOString(),
+    project: snapshot,
+    spreadsheetId: sheetSyncSettings.spreadsheetId || undefined,
+    sheetName: sheetSyncSettings.sheetName || undefined,
+    driveFolderId: sheetSyncSettings.driveFolderId || undefined
+  };
+  try {
+    sheetSyncInFlight = true;
+    setSyncStatus('pending', 'Saving...', { persist: true });
+    const response = await fetch(sheetSyncSettings.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      throw new Error(`Sync failed: HTTP ${response.status}`);
+    }
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      await response.json().catch(() => null);
+    } else {
+      await response.text().catch(() => null);
+    }
+    setSyncStatus('success', 'Saved to Sheets', { timeout: 3200 });
+  } catch (error) {
+    console.error('Sheets sync failed', error);
+    setSyncStatus('error', 'Sheets sync failed', { timeout: 4200 });
+  } finally {
+    sheetSyncInFlight = false;
+  }
 }
 
 function attachPaletteEvents() {
@@ -907,6 +1707,14 @@ function attachGlobalEvents() {
   });
 
   document.addEventListener('keydown', (event) => {
+    if (isSheetsModalOpen()) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeSheetsModal();
+      }
+      return;
+    }
+
     if (isScreenModalOpen()) {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -1425,9 +2233,23 @@ function attachScreenDialogs() {
   });
 
   dialogBackdrop.addEventListener('click', () => {
-    if (!screenModalState) return;
-    if (screenModalState.dismissible === false) return;
-    handleScreenModalCancel();
+    let handled = false;
+    if (isSheetsModalOpen()) {
+      closeSheetsModal();
+      handled = true;
+    }
+    if (screenModalState) {
+      if (screenModalState.dismissible === false) {
+        handled = true;
+      } else {
+        handleScreenModalCancel();
+        handled = true;
+      }
+    }
+    if (!handled) {
+      dialogBackdrop.classList.add('hidden');
+      dialogBackdrop.setAttribute('aria-hidden', 'true');
+    }
   });
 }
 
@@ -1554,6 +2376,7 @@ function createScreen(name) {
   screenCounter += 1;
   refreshSelectionBar();
   refreshLinkSelectOptions();
+  markProjectDirty();
   return id;
 }
 
@@ -1577,6 +2400,7 @@ function setActiveScreen(id) {
   refreshSelectionBar();
   refreshLinkSelectOptions();
   scheduleDetailedAnalyticsRefresh();
+  markProjectDirty();
 }
 
 function renameActiveScreen(newName) {
@@ -1604,6 +2428,7 @@ function updateScreenName(screenId, proposedName) {
   }
   refreshLinkSelectOptions();
   scheduleDetailedAnalyticsRefresh();
+  markProjectDirty();
   return true;
 }
 
@@ -1622,6 +2447,7 @@ function duplicateActiveScreen(requestedName) {
   copyScreenContents(source.canvas, target.canvas);
   setActiveScreen(newScreenId);
   refreshLinkSelectOptions();
+  markProjectDirty();
   return newScreenId;
 }
 
@@ -1680,6 +2506,7 @@ function performDeleteActiveScreen(screenId = activeScreenId) {
 
   refreshLinkSelectOptions();
   scheduleDetailedAnalyticsRefresh();
+  markProjectDirty();
   return true;
 }
 
@@ -2187,21 +3014,27 @@ function setCanvasSize(width, height, screenId = activeScreenId, presetKey = nul
     updateSizeControls(width, height, keyToUse);
     scheduleCanvasScale(screen.canvas);
   }
+  markProjectDirty();
 }
 
 function updateSizeControls(width, height, presetKey) {
   const matchedPreset = presetKey !== 'custom' ? presetKey : findPresetKey(width, height);
   const keyToUse = matchedPreset && SIZE_PRESETS[matchedPreset] ? matchedPreset : 'custom';
 
-  screenSizeSelect.value = keyToUse;
-  currentSizeLabel.textContent = `${width} \u00D7 ${height}`;
-  customWidthInput.value = width;
-  customHeightInput.value = height;
-
-  if (keyToUse === 'custom') {
-    customSizeRow.style.display = 'flex';
-  } else {
-    customSizeRow.style.display = 'none';
+  if (screenSizeSelect) {
+    screenSizeSelect.value = keyToUse;
+  }
+  if (currentSizeLabel) {
+    currentSizeLabel.textContent = `${width} \u00D7 ${height}`;
+  }
+  if (customWidthInput) {
+    customWidthInput.value = width;
+  }
+  if (customHeightInput) {
+    customHeightInput.value = height;
+  }
+  if (customSizeRow) {
+    customSizeRow.style.display = keyToUse === 'custom' ? 'flex' : 'none';
   }
 }
 
@@ -2556,7 +3389,7 @@ function renderAnalysisForScreen(screenId) {
   if (!previewCanvasContainer) return;
   const overlay = previewCanvasContainer.querySelector(`.analysis-overlay[data-screen-id="${screenId}"]`);
   if (!overlay) return;
-  const ctx = overlay.getContext('2d');
+  const ctx = overlay.getContext('2d', { willReadFrequently: true });
   if (!ctx) return;
   ctx.clearRect(0, 0, overlay.width, overlay.height);
   const data = previewInteractionData.get(screenId);
@@ -2571,7 +3404,7 @@ function renderAnalysisForScreen(screenId) {
 
 function renderHeatmapOverlay(targetCtx, overlayCanvas, points) {
   const buffer = getHeatmapBuffer(overlayCanvas);
-  const bufferCtx = buffer.getContext('2d');
+  const bufferCtx = buffer.getContext('2d', { willReadFrequently: true });
   if (!bufferCtx) return;
   bufferCtx.clearRect(0, 0, buffer.width, buffer.height);
   points.forEach(({ x, y }) => {
